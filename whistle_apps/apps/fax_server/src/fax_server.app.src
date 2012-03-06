@@ -1,0 +1,12 @@
+{application, fax_server,
+ [
+  {description, "Fax Server"},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { fax_server_app, []}},
+  {env, []}
+ ]}.
