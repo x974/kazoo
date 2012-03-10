@@ -159,8 +159,6 @@ build_freetdm_route(EndpointJObj) ->
                 end,
     DID = format_did(wh_json:get_binary_value(<<"To-DID">>, EndpointJObj), wh_json:get_value(<<"Invite-Format">>, EndpointJObj, <<"e164">>)),
 
-    lager:debug("freetdm/span: ~s/start: ~s/DID: ~s", [Span, StartFrom, DID]),
-
     [<<"freetdm/">>, Span, <<"/">>, StartFrom, <<"/">>, DID].
 
 -spec format_did/2 :: (ne_binary(), ne_binary()) -> ne_binary().

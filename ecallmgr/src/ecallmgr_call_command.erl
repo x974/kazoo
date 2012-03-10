@@ -680,10 +680,7 @@ get_bridge_endpoint(JObj, <<"sip">>, CVs) ->
             list_to_binary([CVs, EndPoint])
     end;
 get_bridge_endpoint(JObj, <<"freetdm">>, CVs) ->
-    Endpoint = ecallmgr_fs_xml:build_freetdm_route(JObj),
-    lager:info("freetdm endpoint: ~p", [Endpoint]),
-    lager:info("freetdm ccvs: ~p", [CVs]),
-    list_to_binary([CVs, Endpoint]).
+    list_to_binary([CVs, ecallmgr_fs_xml:build_freetdm_route(JObj)]).
 
 %%--------------------------------------------------------------------
 %% @private
