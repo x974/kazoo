@@ -505,6 +505,8 @@ category_to_file(<<"crossbar.devices">>) ->
     [code:lib_dir(crossbar, priv), "/devices/devices.config"];
 category_to_file(<<"crossbar.shared_auth">>) ->
     [code:lib_dir(crossbar, priv), "/shared_auth/shared_auth.config"];
+category_to_file(<<"milliwatt">>) ->
+    [code:lib_dir(milliwatt, priv), "/milliwat.config"];
 category_to_file(_) ->
     undefined.
 
