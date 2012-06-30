@@ -188,8 +188,10 @@ create_sip_endpoint(Endpoint, Properties, Call) ->
             ,{<<"Presence-ID">>, cf_attributes:presence_id(Endpoint, Call)}
             ,{<<"SIP-Headers">>, generate_sip_headers(Endpoint, Call)}
             ,{<<"Custom-Channel-Vars">>, generate_ccvs(Endpoint, Call)}
+            ,{<<"Sip-Transport">>, wh_json:get_value(<<"sip_transport">>, Endpoint)}
+            ,{<<"Secure-RTP">>, wh_json:get_value(<<"secure_rtp">>, Endpoint)}
            ],
-    wh_json:from_list([ KV || {_, V}=KV <- Prop, V =/= undefined ]).
+    wh_json:from_list(props:filter_undefined(Prop)).
 
 %%--------------------------------------------------------------------
 %% @private
