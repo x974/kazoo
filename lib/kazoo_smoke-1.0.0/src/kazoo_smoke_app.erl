@@ -1,4 +1,4 @@
--module(whistle_smoke_app).
+-module(kazoo_smoke_app).
 
 -behaviour(application).
 
@@ -10,7 +10,7 @@
 %% ===================================================================
 
 start(_StartType, _StartArgs) ->
-    whistle_smoke_sup:start_link().
+    kazoo_smoke_sup:start_link().
 
 stop(_State) ->
     ok.

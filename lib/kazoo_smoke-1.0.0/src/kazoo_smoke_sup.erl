@@ -1,5 +1,5 @@
 
--module(whistle_smoke_sup).
+-module(kazoo_smoke_sup).
 
 -behaviour(supervisor).
 
