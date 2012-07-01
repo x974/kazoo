@@ -6,7 +6,7 @@
 %%% @contributors
 %%%   James Aimonetti
 %%%-------------------------------------------------------------------
--module(wh_udp).
+-module(smoke_udp).
 
 -export([name/0]).
 -export([messages/0]).
@@ -54,22 +54,38 @@ connect(_Host, Port, Opts) when is_list(_Host), is_integer(Port) ->
             -> {ok, inet:socket()} | {error, atom()}.
 listen(Opts) ->
     {port, Port} = lists:keyfind(port, 1, Opts),
-    Backlog = proplists:get_value(backlog, Opts, 1024),
-    ListenOpts0 = [binary, {active, false},
-                   {backlog, Backlog}, {packet, raw}, {reuseaddr, true}],
+    lager:debug("starting UDP acceptor on port ~b", [Port]),
+
+    Backlog = props:get_value(backlog, Opts, 1024),
+    lager:debug("backlog: ~p", [Backlog]),
+
+    ListenOpts0 = [binary
+                   ,{active, false}
+                   ,{backlog, Backlog}
+                   ,{packet, raw}
+                   ,{reuseaddr, true}
+                  ],
     ListenOpts =
-                case lists:keyfind(ip, 1, Opts) of
-                    false -> ListenOpts0;
-                    Ip -> [Ip|ListenOpts0]
-                end,
+        case lists:keyfind(ip, 1, Opts) of
+            false -> ListenOpts0;
+            Ip -> [Ip|ListenOpts0]
+        end,
+
+    lager:debug("open UDP port ~b with opts: ~p", [Port, ListenOpts]),
+
     gen_udp:open(Port, ListenOpts).
 
 %% @doc Accept an incoming connection on a listen socket.
 %% @see gen_udp:accept/2
 -spec accept(inet:socket(), timeout())
         -> {ok, inet:socket()} | {error, closed | timeout | atom()}.
-accept(LSocket, _Timeout) ->
-    {ok, LSocket}.
+accept(Socket, Timeout) ->
+    receive
+        {udp, Socket, IP, InPortNo, Packet} ->
+            lager:debug("recv packet from ~p(~p): ~p", [IP, InPortNo, Packet]),
+            self() ! {recv_packet, IP, InPortNo, Packet},
+            {ok, Socket}
+    after Timeout -> {error, timeout}.
 
 %% @doc Receive a packet from a socket in passive mode.
 %% @see gen_udp:recv/3

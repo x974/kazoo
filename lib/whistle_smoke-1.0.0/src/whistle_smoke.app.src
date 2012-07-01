@@ -1,0 +1,12 @@
+{application, whistle_smoke,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { whistle_smoke_app, []}},
+  {env, []}
+ ]}.
