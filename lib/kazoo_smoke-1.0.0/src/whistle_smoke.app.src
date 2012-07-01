@@ -1,6 +1,6 @@
 {application, whistle_smoke,
  [
-  {description, ""},
+  {description, "Smoke - SIP signaling framework"},
   {vsn, "1"},
   {registered, []},
   {applications, [
