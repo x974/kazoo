@@ -1,4 +1,11 @@
-
+%%%-------------------------------------------------------------------
+%%% @copyright (C) 2012, VoIP INC
+%%% @doc
+%%%
+%%% @end
+%%% @contributors
+%%%   James Aimonetti
+%%%-------------------------------------------------------------------
 -module(kazoo_smoke_sup).
 
 -behaviour(supervisor).
