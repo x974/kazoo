@@ -14,23 +14,27 @@
          ,start_listener/5
         ]).
 
+-include("smoke.hrl").
+
 start_link() ->
     start_deps(),
-    kazoo_smoke_sup:start_link().
+    lager:debug("started deps"),
+    smoke_sup:start_link().
 
 start() ->
     start_deps(),
+    lager:debug("started deps"),
     application:start(kazoo_smoke).
 
 stop() ->
+    lager:debug("stopped application"),
     application:stop(kazoo_smoke).
 
-start_listener(Ref, _N, smoke_udp, TransOpts, ProtoOpts) ->
-    supervisor:start_child(smoke_udp_sup, child_spec(Ref, TransOpts, ProtoOpts));
+start_listener(Ref, _N, smoke_udp_transport, TransOpts, ProtoOpts) ->
+    smoke_transport_sup:start_transport(Ref, smoke_udp_transport, TransOpts, smoke_sip_protocol, ProtoOpts);
 start_listener(Ref, NumAcceptors, Transport, TransOpts, ProtoOpts)
-  when is_integer(NbAcceptors) andalso
-       is_atom(Transport) andalso
-       is_atom(Protocol) ->
+  when is_integer(NumAcceptors) andalso
+       is_atom(Transport) ->
     ranch:start_listener(Ref, NumAcceptors
                          ,Transport, TransOpts
                          ,smoke_sip_protocol, ProtoOpts

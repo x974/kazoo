@@ -1,26 +1,70 @@
 %%%-------------------------------------------------------------------
 %%% @copyright (C) 2012, VoIP INC
 %%% @doc
-%%% Abstraction layer for gen_udp, modeled off of ranch's tcp handler
+%%% Opens and accepts data from the socket, handing the data off to the
+%%% protocol handler
 %%% @end
 %%% @contributors
 %%%   James Aimonetti
 %%%-------------------------------------------------------------------
--module(smoke_udp).
+-module(smoke_udp_transport).
 
--export([name/0]).
--export([messages/0]).
--export([listen/1]).
--export([recv/3]).
--export([send/4]).
--export([setopts/2]).
--export([controlling_process/2]).
--export([peername/1]).
--export([close/1]).
--export([sockname/1]).
--export([posix_to_friendly/1]).
+%% API
+-export([start_link/3
+         ,receiver/3
+        ]).
+
+%% Helpers
+-export([name/0
+         ,messages/0
+         ,listen/1
+         ,recv/3
+         ,send/4
+         ,setopts/2
+         ,controlling_process/2
+         ,peername/1
+         ,close/1
+         ,sockname/1
+         ,posix_to_friendly/1
+        ]).
+
+-export_type([payload/0]).
 
 -include("smoke.hrl").
+
+-spec start_link/3 :: (wh_proplist(), module(), wh_proplist()) -> {'ok', pid()}.
+start_link(TransOpts, Protocol, ProtoOpts) ->
+    lager:debug("starting UDP transport"),
+    case catch ?MODULE:listen(TransOpts) of
+        {ok, Socket} ->
+            lager:debug("listening to socket: ~p", [Socket]),
+            Pid = spawn_link(?MODULE, receiver, [Socket, Protocol, ProtoOpts]),
+            lager:debug("receiver at ~p", [Pid]),
+            {ok, Pid};
+        {error, _E}=E ->
+            lager:debug("failed to open socket: ~p", [_E]),
+            E;
+        {'EXIT', R} ->
+            ST = erlang:get_stacktrace(),
+            lager:debug("crashed while opening socket: ~p", [R]),
+            [lager:debug("s: ~p", [S]) || S <- ST],
+            {error, R}
+    end.
+
+-spec receiver/3 :: (inet:socket(), module(), wh_proplist()) -> 'ok'.
+receiver(Socket, Protocol, ProtoOpts) ->
+    case ?MODULE:recv(Socket, 0, 5000) of
+        {ok, Socket, Payload} ->
+            lager:debug("payload recv: ~p", [Payload]),
+            smoke_protocol_sup:start_request(Socket, ?MODULE, Protocol, ProtoOpts, Payload),
+            receiver(Socket, Protocol, ProtoOpts);
+        {error, timeout} -> 
+            lager:debug("timed out waiting for a packet, trying again"),
+            receiver(Socket, Protocol, ProtoOpts);
+        {error, _E} ->
+            lager:debug("error waiting for a packet: ~p", [_E]),
+            ok
+    end.
 
 %% @doc Name of this transport API, <em>udp</em>.
 -spec name() -> 'udp'.
@@ -55,7 +99,6 @@ listen(Opts) ->
 
     ListenOpts0 = [binary
                    ,{active, false}
-                   ,{packet, raw}
                    ,{reuseaddr, true}
                   ],
     ListenOpts =
@@ -70,12 +113,14 @@ listen(Opts) ->
 
 %% @doc Receive a packet from a socket in passive mode.
 %% @see gen_udp:recv/3
+-type payload() :: {inet:ip_address(), inet:port_number(), ne_binary()}.
+
 -spec recv(inet:socket(), non_neg_integer(), timeout()) ->
-                  {'ok', inet:socket(), inet:ip_address(), inet:port_number(), ne_binary()} |
+                  {'ok', inet:socket(), payload()} |
                   {'error', 'closed' | atom()}.
 recv(Socket, Length, Timeout) ->
     case gen_udp:recv(Socket, Length, Timeout) of
-        {ok, {SenderIP, SenderPort, Packet}} -> {ok, Socket, SenderIP, SenderPort, Packet};
+        {ok, {_SenderIP, _SenderPort, _Packet}=Payload} -> {ok, Socket, Payload};
         {error, _}=E -> E
     end.
 

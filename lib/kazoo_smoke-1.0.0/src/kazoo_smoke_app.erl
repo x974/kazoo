@@ -10,7 +10,7 @@
 %% ===================================================================
 
 start(_StartType, _StartArgs) ->
-    kazoo_smoke_sup:start_link().
+    kazoo_smoke:start_link().
 
 stop(_State) ->
     ok.

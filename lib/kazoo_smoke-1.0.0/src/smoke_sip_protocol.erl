@@ -7,23 +7,28 @@
 %%% @contributors
 %%%   James Aimonetti
 %%%-------------------------------------------------------------------
--module(wh_sip_protocol).
+-module(smoke_sip_protocol).
 
--behaviour(cowboy_protocol).
+-export([start_request/4]). %% API.
 
--export([start_link/4]). %% API.
--export([init/4, parse_request/1, handler_loop/3]). %% FSM.
+-export([init/4
+         ,parse_request/1
+         ,handler_loop/3
+        ]).
 
--include_lib("whistle/include/sip.hrl").
+-include("smoke.hrl").
+-include("sip.hrl").
 
 -record(state, {
-          listener :: pid()
-         ,socket :: inet:socket()
+          socket :: inet:socket()
          ,transport :: module()
          ,handler :: {module(), any()}
-         ,onrequest :: fun((#sip_req{}) -> #sip_req{})
-         ,onresponse :: fun((wh_sip:status(), wh_sip:headers(), #sip_req{}) -> #sip_req{})
+         ,onrequest :: fun((smoke_sip:sip_req()) -> smoke_sip:sip_req())
+         ,onresponse :: fun((wh_sip:status(), wh_sip:headers(), smoke_sip:sip_req()) -> smoke_sip:sip_req())
          ,hibernate = false :: boolean()
+
+         ,sender_ip :: inet:ip_address()
+         ,sender_port :: inet:port_number()
 
          ,req_empty_lines = 0 :: integer()
          ,max_empty_lines :: integer()
@@ -41,15 +46,15 @@
 %% API
 
 %% @doc Start a SIP protocol process
--spec start_link(pid(), inet:socket(), module(), any()) -> {ok, pid()}.
-start_link(ListenerPid, Socket, Transport, Opts) ->
-        Pid = spawn_link(?MODULE, init, [ListenerPid, Socket, Transport, Opts]),
-        {ok, Pid}.
+-spec start_request/4 :: (inet:socket(), module(), wh_proplist(), any()) -> {'ok', pid()}.
+start_request(Socket, Transport, ProtoOpts, Payload) ->
+    Pid = spawn_link(?MODULE, init, [Socket, Transport, ProtoOpts, Payload]),
+    {ok, Pid}.
 
 %% FSM
 %% @private
--spec init/4 :: (pid(), inet:socket(), module(), any()) -> 'ok'.
-init(ListenerPid, Socket, Transport, Opts) ->
+-spec init/4 :: (inet:socket(), module(), wh_proplist(), any()) -> 'ok'.
+init(Socket, Transport, Opts, {SenderIP, SenderPort, Buffer}) ->
     Dispatch = proplists:get_value(dispatch, Opts, []),
 
     MaxEmptyLines = proplists:get_value(max_empty_lines, Opts, 5),
@@ -61,18 +66,19 @@ init(ListenerPid, Socket, Transport, Opts) ->
 
     Timeout = props:get_value(timeout, Opts, 5000),
 
-    ok = cowboy:accept_ack(ListenerPid),
-    wait_request(#state{listener=ListenerPid
-                        ,socket=Socket
-                        ,transport=Transport
-                        ,dispatch=Dispatch
-                        ,max_empty_lines=MaxEmptyLines
-                        ,max_keepalive=MaxKeepalive
-                        ,max_line_length=MaxLineLength
-                        ,timeout=Timeout
-                        ,onrequest=OnRequest
-                        ,onresponse=OnResponse
-                       }).
+    parse_request(#state{socket=Socket
+                         ,transport=Transport
+                         ,dispatch=Dispatch
+                         ,max_empty_lines=MaxEmptyLines
+                         ,max_keepalive=MaxKeepalive
+                         ,max_line_length=MaxLineLength
+                         ,timeout=Timeout
+                         ,onrequest=OnRequest
+                         ,onresponse=OnResponse
+                         ,sender_ip=SenderIP
+                         ,sender_port=SenderPort
+                         ,buffer=Buffer
+                        }).
 
 -spec wait_request/1 :: (#state{}) -> 'ok'.
 wait_request(#state{socket=Socket
@@ -90,16 +96,24 @@ wait_request(#state{socket=Socket
 %% We limit the length of the Request-line to MaxLength to avoid endlessly
 %% reading from the socket and eventually crashing.
 parse_request(#state{buffer=Buffer, max_line_length=MaxLength}=State) ->
-    case erlang:decode_packet(http_bin, Buffer, []) of
-        {ok, Request, Rest} -> request(Request, State#state{buffer=Rest});
-        {more, _Length} when byte_size(Buffer) > MaxLength ->
-            error_terminate(413, State);
-        {more, _Length} -> wait_request(State);
-        {error, _Reason} -> error_terminate(400, State)
+    lager:debug("buffer s: ~b(~b)", [byte_size(Buffer), MaxLength]),
+    parse_method(smoke_sip:sip_req(), Buffer).
+
+parse_method(SipReq, Buffer) ->
+    case smoke_sip:extract_method(SipReq, Buffer) of
+        {error, _}=E -> E;
+        {SipReq1, Buffer1} ->
+            parse_request_uri(SipReq1, Buffer1)
     end.
 
--spec request/2 :: ({'http_request', wh_sip:method(), cowboy_http:uri(), wh_sip:version()}
-                    ,#state{}) -> 'ok'.
+parse_request_uri(SipReq, Buffer) ->
+    {SipReq1, Buffer1} = smoke_sip:extract_request_uri(Buffer),
+    parse_version(SipReq1, Buffer1).
+
+parse_version(_SipReq, _Buffer) ->
+    ok.
+
+-spec request/2 :: (any(), #state{}) -> 'ok'.
 request({http_request, _Method, _URI, Version}, State) when Version =/= {2, 0} ->
     error_terminate(505, State);
 %% We still receive the original Host header.
@@ -129,8 +143,8 @@ request(_Any, State) ->
     lager:debug("no handler for request clause: ~p", [_Any]),
     error_terminate(400, State).
 
--spec parse_header/2 :: (#sip_req{}, #state{}) -> 'ok'.
-parse_header(#sip_req{}=Req, #state{buffer=Buffer
+-spec parse_header/2 :: (smoke_sip:sip_req(), #state{}) -> 'ok'.
+parse_header(smoke_sip:sip_req()=Req, #state{buffer=Buffer
                                     ,max_line_length=MaxLength
                                    }=State) ->
     case erlang:decode_packet(httph_bin, Buffer, []) of
@@ -141,7 +155,7 @@ parse_header(#sip_req{}=Req, #state{buffer=Buffer
         {error, _Reason} -> error_terminate(400, State)
     end.
 
--spec wait_header/2 :: (#sip_req{}, #state{}) -> 'ok'.
+-spec wait_header/2 :: (smoke_sip:sip_req(), #state{}) -> 'ok'.
 wait_header(Req, #state{socket=Socket
                         ,transport=Transport
                         ,timeout=T
@@ -156,7 +170,7 @@ wait_header(Req, #state{socket=Socket
     end.
 
 -spec header({http_header, integer(), cowboy_http:header(), any(), binary()}
-             | http_eoh, #sip_req{}, #state{}) -> ok.
+             | http_eoh, smoke_sip:sip_req(), #state{}) -> ok.
 header({http_header, _I, Field, _R, Value}, Req, State) ->
     lager:debug("header ~s: ~s", [Field, Value]),
     Field2 = format_header(Field),
@@ -173,7 +187,7 @@ header(_Any, _Req, State) ->
 %% in which case we consider the request handled and move on to the next
 %% one. Note that since we haven't dispatched yet, we don't know the
 %% handler, host_info, path_info or bindings yet.
--spec onrequest(#sip_req{}, #state{}) -> ok.
+-spec onrequest(smoke_sip:sip_req(), #state{}) -> ok.
 onrequest(Req, State=#state{onrequest=undefined}) ->
     dispatch(Req, State);
 onrequest(Req, State=#state{onrequest=OnRequest}) ->
