@@ -96,21 +96,12 @@ wait_request(#state{socket=Socket
 %% reading from the socket and eventually crashing.
 parse_request(#state{buffer=Buffer, max_line_length=MaxLength}=State) ->
     lager:debug("buffer s: ~b(~b)", [byte_size(Buffer), MaxLength]),
-    parse_method(smoke_sip:sip_req(), Buffer).
-
-parse_method(SipReq, Buffer) ->
-    case smoke_sip:extract_method(SipReq, Buffer) of
-        {error, _}=E -> E;
-        {SipReq1, Buffer1} ->
-            parse_request_uri(SipReq1, Buffer1)
+    case smoke_sip:parse_sip_packet(Buffer) of
+        {error, Code} -> error_terminate(Code, State);
+        {ok, Req} ->
+            io:format("req: ~p~n", [Req]),
+            ok
     end.
-
-parse_request_uri(SipReq, Buffer) ->
-    {SipReq1, Buffer1} = smoke_sip:extract_request_uri(Buffer),
-    parse_version(SipReq1, Buffer1).
-
-parse_version(_SipReq, _Buffer) ->
-    ok.
 
 %% -spec wait_header/2 :: (smoke_sip_req:sip_req(), #state{}) -> 'ok'.
 %% wait_header(Req, #state{socket=Socket
