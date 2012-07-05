@@ -1,5 +1,16 @@
 -ifndef(SMOKE_SIP_HRL).
 
+-type sip_version() :: 'SIP/2.0'.
+-define(SIP_VERSION_2_0, 'SIP/2.0').
+
+-record(sip_via, {
+          version = ?SIP_VERSION_2_0 :: sip_version()
+          ,transport = 'udp' :: sip_transport()
+          ,host :: ne_binary()
+          ,port :: inet:port_number()
+          ,params :: sip_uri_params()
+         }).
+
 -record(sip_uri_params, {
           transport = 'undefined' :: sip_transport() | 'undefined'
           ,maddr = 'undefined' :: ne_binary() | 'undefined' % overrides address derived from Host field
@@ -11,7 +22,8 @@
          }).
 
 -record(sip_uri, {
-          scheme = 'sip' :: 'sip' | 'sips'
+          display_name :: ne_binary()
+         ,scheme = 'sip' :: 'sip' | 'sips'
          ,user = <<"nouser">> :: ne_binary()
          ,password = <<>> :: binary()
          ,host = <<"nohost">> :: ne_binary()
@@ -49,6 +61,7 @@
 -type onrequest() :: fun().
 -type onresponse() :: fun().
 
+-opaque sip_via() :: #sip_via{}.
 -opaque sip_req() :: #sip_req{}.
 -opaque sip_uri() :: #sip_uri{}.
 -opaque sip_uri_params() :: #sip_uri_params{}.
@@ -73,8 +86,6 @@
 
 -type sip_transport() :: 'udp' | 'tcp' | 'tls' | 'sctp'.
 -define(TRANSPORTS_SUPPORTED, ['udp', 'tcp', 'tls', 'sctp']).
-
--type sip_version() :: 'SIP/2.0'.
 
 -type sip_header() :: 'Via' | 'To' | 'From' | 'CSeq' | 'Call-ID' | % these go in all responses
                       'Max-Forwards' | 'Contact' | 'Content-Type' |
