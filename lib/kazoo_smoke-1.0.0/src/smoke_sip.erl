@@ -306,7 +306,7 @@ extract_sip_host(<<":", Buffer/binary>>, Acc) ->
     % have port to extract
     {Port, Buffer1} = extract_sip_port(Buffer),
     {iolist_to_binary(lists:reverse(Acc)), Port, Buffer1};
-extract_sip_host(<<";", Buffer/binary>>, Acc) ->
+extract_sip_host(<<";", _/binary>> = Buffer, Acc) ->
     % no port, at host params boundry
     {iolist_to_binary(lists:reverse(Acc)), undefined, Buffer};
 extract_sip_host(<<" ", _/binary>> = Buffer, Acc) ->
@@ -328,7 +328,7 @@ extract_sip_host(<<H:1/binary, Buffer/binary>>, Acc) ->
 -spec extract_sip_port/2 :: (ne_binary(), list()) -> {pos_integer(), ne_binary()}.
 extract_sip_port(Buffer) ->
     extract_sip_port(Buffer, []).
-extract_sip_port(<<";", Buffer/binary>>, Acc) ->
+extract_sip_port(<<";", _/binary>> = Buffer, Acc) ->
     % at params boundry
     {wh_util:to_integer(lists:reverse(Acc)), Buffer};
 extract_sip_port(<<" ", _/binary>> = Buffer, Acc) ->
@@ -365,33 +365,36 @@ extract_sip_params(<<"\r\n", _/binary>> = Buffer, Params) ->
 extract_sip_params(<<"\n", _/binary>> = Buffer, Params) ->
     % no headers, at line ending
     {Params, [], Buffer};
-extract_sip_params(<<";", Buffer/binary>>, Params) ->
-    % delimiter to start params
-    extract_sip_params(Buffer, Params);
-extract_sip_params(<<"transport=", Buffer/binary>>, #sip_uri_params{transport=undefined}=Params) ->
+%% extract_sip_params(<<";", Buffer/binary>>, Params) ->
+%%     % delimiter to start params
+%%     extract_sip_params(Buffer, Params);
+extract_sip_params(<<";transport=", Buffer/binary>>, #sip_uri_params{transport=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
     case is_known_transport(V) of
         {true, T} -> extract_sip_params(Buffer1, Params#sip_uri_params{transport=T});
         false -> {error, 400}
     end;
-extract_sip_params(<<"maddr=", Buffer/binary>>, #sip_uri_params{maddr=undefined}=Params) ->
+extract_sip_params(<<";maddr=", Buffer/binary>>, #sip_uri_params{maddr=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
     extract_sip_params(Buffer1, Params#sip_uri_params{maddr=wh_util:to_lower_binary(V)});
-extract_sip_params(<<"ttl=", Buffer/binary>>, #sip_uri_params{ttl=undefined}=Params) ->
+extract_sip_params(<<";ttl=", Buffer/binary>>, #sip_uri_params{ttl=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
     extract_sip_params(Buffer1, Params#sip_uri_params{ttl=wh_util:to_integer(V)});
-extract_sip_params(<<"user=", Buffer/binary>>, #sip_uri_params{user=undefined}=Params) ->
+extract_sip_params(<<";user=", Buffer/binary>>, #sip_uri_params{user=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
     extract_sip_params(Buffer1, Params#sip_uri_params{user=wh_util:to_lower_binary(V)});
-extract_sip_params(<<"lr=", Buffer/binary>>, #sip_uri_params{lr=undefined}=Params) ->
-    {V, Buffer1} = extract_sip_param_value(Buffer),
-    extract_sip_params(Buffer1, Params#sip_uri_params{lr=wh_util:to_lower_binary(V)});
-extract_sip_params(<<"method=", Buffer/binary>>, #sip_uri_params{method=undefined}=Params) ->
+extract_sip_params(<<";lr", Buffer/binary>>, #sip_uri_params{lr=undefined}=Params) ->
+    %% not the greatest way to determine if this is the lr, or a lr.+ param
+    extract_sip_params(Buffer, Params#sip_uri_params{lr=true});
+extract_sip_params(<<";method=", Buffer/binary>>, #sip_uri_params{method=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
     case is_known_method(V) of
         {true, M} -> extract_sip_params(Buffer1, Params#sip_uri_params{method=M});
         false -> {error, 400}
     end;
+extract_sip_params(<<">", Buffer/binary>>, Params) ->
+    % end of the URI sometimes
+    extract_sip_params(Buffer, Params);
 extract_sip_params(Buffer, #sip_uri_params{other=Other}=Params) ->
     {Key, Buffer1} = extract_sip_param_key(Buffer),
     case props:get_value(Key, Other) of
@@ -408,12 +411,15 @@ extract_sip_param_key(Buffer) ->
     extract_sip_param_key(Buffer, []).
 extract_sip_param_key(<<"=", Buffer/binary>>, Acc) ->
     {decode(lists:reverse(Acc)), Buffer};
+extract_sip_param_key(<<";", Buffer/binary>>, _) ->
+    %% start of a key
+    extract_sip_param_key(Buffer, []);
 extract_sip_param_key(<<K:1/binary, Buffer/binary>>, Acc) ->
     extract_sip_param_key(Buffer, [K | Acc]).
 
 extract_sip_param_value(Buffer) ->
     extract_sip_param_value(Buffer, []).
-extract_sip_param_value(<<";", Buffer/binary>>, Acc) ->
+extract_sip_param_value(<<";", _/binary>> = Buffer, Acc) ->
     % k/v delimiter
     {decode(lists:reverse(Acc)), Buffer};
 extract_sip_param_value(<<>>, Acc) ->
@@ -1227,5 +1233,45 @@ sip_uri_display_name_tags_test() ->
     ?assertEqual('undefined', Me),
     ?assertEqual('undefined', LR),
     ?assertEqual([{<<"tag">>, <<"3et3x2avh64xr">>}], O).
+
+sip_uri_lr_param_test() ->
+    Uri = <<"<sip:alice@192.168.1.1;lr>">>,
+    {#sip_uri{
+        display_name=DN
+        ,scheme=Scheme
+        ,user=U
+        ,password=P
+        ,host=H
+        ,port=Port
+        ,params=Params
+        ,headers=Hdrs
+       }
+     ,_} = extract_sip_uri(Uri),
+
+    ?assertEqual('undefined', DN),
+    ?assertEqual('sip', Scheme),
+    ?assertEqual(<<"alice">>, U),
+    ?assertEqual('undefined', P),
+    ?assertEqual(<<"192.168.1.1">>, H),
+    ?assertEqual('undefined', Port),
+    ?assertEqual([], Hdrs),
+
+    #sip_uri_params{transport=Tr
+                    ,maddr=Ma
+                    ,ttl=TTL
+                    ,user=User
+                    ,method=Me
+                    ,lr=LR
+                    ,other=O
+                   } = Params,
+
+    ?assertEqual('undefined', Tr),
+    ?assertEqual('undefined', Ma),
+    ?assertEqual('undefined', TTL),
+    ?assertEqual('undefined', User),
+    ?assertEqual('undefined', Me),
+    ?assertEqual('true', LR),
+    ?assertEqual([], O).
+
 
 -endif.
