@@ -24,8 +24,8 @@
 -record(sip_uri, {
           display_name :: ne_binary()
          ,scheme = 'sip' :: 'sip' | 'sips'
-         ,user = <<"nouser">> :: ne_binary()
-         ,password = <<>> :: binary()
+         ,user :: ne_binary()
+         ,password :: binary()
          ,host = <<"nohost">> :: ne_binary()
          ,port :: integer()
          ,params :: sip_uri_params() 
