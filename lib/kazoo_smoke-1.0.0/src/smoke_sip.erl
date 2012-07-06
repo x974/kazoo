@@ -27,6 +27,7 @@
 
 -include("smoke.hrl").
 -include("smoke_sip.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -export_type([sip_method/0
               ,sip_version/0
@@ -61,14 +62,20 @@ is_known_method(M) ->
     end.
 
 -spec is_known_transport/1 :: (atom() | string() | binary()) -> 'false' | {'true', sip_transport()}.
-is_known_transport(T) ->
-    case catch wh_util:to_atom(T) of
+is_known_transport(T) when is_binary(T) ->
+    case catch is_known_transport(wh_util:to_atom(wh_util:to_lower_binary(T))) of
         {'EXIT', _} -> false;
-        Tatom when is_atom(Tatom) ->
-            case lists:member(Tatom, ?TRANSPORTS_SUPPORTED) of
-                true -> {true, Tatom};
-                false -> false
-            end
+        {true, _}=OK -> OK
+    end;
+is_known_transport(T) when is_list(T) ->
+    case catch is_known_transport(wh_util:to_atom(wh_util:to_lower(T))) of
+        {'EXIT', _} -> false;
+        {true, _}=OK -> OK
+    end;
+is_known_transport(T) when is_atom(T) ->
+    case lists:member(T, ?TRANSPORTS_SUPPORTED) of
+        true -> {true, T};
+        false -> false
     end.
 
 -spec is_known_header/1 :: (atom() | string() | binary()) -> 'false' | {'true', sip_header()}.
@@ -112,14 +119,17 @@ parse_sip_packet(Buffer, M, RUri) ->
 parse_sip_packet(Buffer, M, #sip_uri{user=U, host=H}=RUri, _Vsn) ->
     lager:info("recv ~s request for: ~s@~s", [M, U, H]),
 
-    HeadersToSet = parse_sip_headers(Buffer),
+    {SipHeaders, Body} = parse_sip_headers(Buffer),
 
-    lists:foldl(fun({F, D}, R) -> smoke_sip_req:F(R, D) end
-                ,smoke_sip_req:new()
-                ,[{set_method, M}
-                  ,{set_request_uri, RUri}
-                  | HeadersToSet
-                 ]).
+    lager:debug("body: ~p", [Body]),
+
+    Req = lists:foldl(fun({F, D}, R) -> smoke_sip_req:F(R, D) end
+                      ,smoke_sip_req:new()
+                      ,[{set_method, M}
+                        ,{set_request_uri, RUri}
+                        ,{set_headers, SipHeaders}
+                       ]),
+    {ok, smoke_sip_req:set_request_body(Req, Body)}.
 
 %% Parse out the headers and return the list of setters with values, as well as
 %% the body (if any)
@@ -129,45 +139,58 @@ parse_sip_packet(Buffer, M, #sip_uri{user=U, host=H}=RUri, _Vsn) ->
 parse_sip_headers(Buffer) ->
     parse_sip_headers(Buffer, [], []).
 
+%% Buffer, ListOfHeadersParsed, HeaderKeySoFar
 parse_sip_headers(<<"\r\n\r\n", Buffer/binary>>, Headers, _) ->
     {Headers, Buffer};
 parse_sip_headers(<<>>, Headers, _) ->
     {Headers, <<>>};
-parse_sip_headers(<<"\r\n", Buffer/binary>>, Headers, _) ->
-    parse_sip_headers(Buffer, Headers, []);
-parse_sip_headers(<<"\n", Buffer/binary>>, Headers, _) ->
-    parse_sip_headers(Buffer, Headers, []);
 parse_sip_headers(<<" ", Buffer/binary>>, Headers, HeaderKey) ->
     %% ignore whitespace between Key and :
     parse_sip_headers(Buffer, Headers, HeaderKey);
 parse_sip_headers(<<":", Buffer/binary>>, Headers, HeaderKey) ->
-    case parse_sip_header(Buffer, list_to_binary(lists:reverse(HeaderKey))) of
+    case parse_sip_header_value(Buffer, list_to_binary(lists:reverse(HeaderKey))) of
         {error, _}=E -> E;
         {Buffer1, K, V} -> parse_sip_headers(Buffer1, [{K,V} | Headers], [])
     end;
+parse_sip_headers(<<"\r\n", Buffer/binary>>, Headers, _) ->
+    parse_sip_headers(Buffer, Headers, []);
 parse_sip_headers(<<K, Buffer/binary>>, Headers, HeaderKey) ->
     parse_sip_headers(Buffer, Headers, [K | HeaderKey]).
 
--spec parse_sip_header/2 :: (ne_binary(), ne_binary()) -> {ne_binary(), sip_header() | ne_binary(), ne_binary()}.
-parse_sip_header(<<" ", Buffer/binary>>, Key) ->
+-spec parse_sip_header_value/2 :: (ne_binary(), ne_binary()) -> {ne_binary(), sip_header() | ne_binary(), ne_binary()}.
+parse_sip_header_value(<<" ", Buffer/binary>>, Key) ->
     %% remove whitespace after the :
-    parse_sip_header(Buffer, Key);
-parse_sip_header(Buffer, Key) ->
+    parse_sip_header_value(Buffer, Key);
+parse_sip_header_value(Buffer, Key) ->
     lager:debug("parsing key '~s' from '~s'", [Key, Buffer]),
     case is_known_header(Key) of
-        {true, Header} -> parse_sip_header(Buffer, Header, []);
-        false -> parse_sip_header(Buffer, Key, [])
+        {true, Header} -> parse_sip_header_value(Buffer, Header, []);
+        false -> parse_sip_header_value(Buffer, Key, [])
     end.
-parse_sip_header(<<"\r\n", Buffer/binary>>, Key, Acc) ->
+
+parse_sip_header_value(<<"\r\n\r\n", _/binary>> = Buffer, Key, Acc) ->
+    %% otherwise, newline indicates end of value collection
     V = list_to_binary(lists:reverse(Acc)),
     lager:debug("header '~s': '~s'", [Key, V]),
     {Buffer, Key, format_sip_header_value(Key, V)};
-parse_sip_header(<<"\n", Buffer/binary>>, Key, Acc) ->
+parse_sip_header_value(<<"\r\n ", Buffer/binary>>, Key, Acc) ->
+    %% newline with a space - continued value
+    parse_sip_header_value(Buffer, Key, Acc);
+parse_sip_header_value(<<"\r\n\t", Buffer/binary>>, Key, Acc) ->
+    %% newline with a horizontal tab - continued value
+    parse_sip_header_value(Buffer, Key, Acc);
+parse_sip_header_value(<<"\r\n", Buffer/binary>>, Key, Acc) ->
+    %% otherwise, newline indicates end of value collection
     V = list_to_binary(lists:reverse(Acc)),
     lager:debug("header '~s': '~s'", [Key, V]),
     {Buffer, Key, format_sip_header_value(Key, V)};
-parse_sip_header(<<V, Buffer/binary>>, Key, Acc) ->
-    parse_sip_header(Buffer, Key, [V | Acc]).
+parse_sip_header_value(<<"\n", Buffer/binary>>, Key, Acc) ->
+    %% otherwise, newline indicates end of value collection
+    V = list_to_binary(lists:reverse(Acc)),
+    lager:debug("header '~s': '~s'", [Key, V]),
+    {Buffer, Key, format_sip_header_value(Key, V)};
+parse_sip_header_value(<<V, Buffer/binary>>, Key, Acc) ->
+    parse_sip_header_value(Buffer, Key, [V | Acc]).
 
 extract_sip_version(<<"SIP/2.0", Buffer/binary>>) ->
     {version(), Buffer};
@@ -328,21 +351,22 @@ extract_sip_host(<<H:1/binary, Buffer/binary>>, Acc) ->
 -spec extract_sip_port/2 :: (ne_binary(), list()) -> {pos_integer(), ne_binary()}.
 extract_sip_port(Buffer) ->
     extract_sip_port(Buffer, []).
+
 extract_sip_port(<<";", _/binary>> = Buffer, Acc) ->
     % at params boundry
-    {wh_util:to_integer(lists:reverse(Acc)), Buffer};
+    {wh_util:to_integer([D || <<D>> <- lists:reverse(Acc)]), Buffer};
 extract_sip_port(<<" ", _/binary>> = Buffer, Acc) ->
     % at end of URI
-    {wh_util:to_integer(lists:reverse(Acc)), Buffer};
+    {wh_util:to_integer([D || <<D>> <- lists:reverse(Acc)]), Buffer};
 extract_sip_port(<<">", Buffer/binary>>, Acc) ->
     % at end of host:port, could be params/headers afterwards
-    {wh_util:to_integer(lists:reverse(Acc)), Buffer};
+    {wh_util:to_integer([D || <<D>> <- lists:reverse(Acc)]), Buffer};
 extract_sip_port(<<"\r\n", _/binary>> = Buffer, Acc) ->
     % no port, at line ending
-    {wh_util:to_integer(lists:reverse(Acc)), Buffer};
+    {wh_util:to_integer([D || <<D>> <- lists:reverse(Acc)]), Buffer};
 extract_sip_port(<<"\n", _/binary>> = Buffer, Acc) ->
     % no port, at line ending
-    {wh_util:to_integer(lists:reverse(Acc)), Buffer};
+    {wh_util:to_integer([D || <<D>> <- lists:reverse(Acc)]), Buffer};
 extract_sip_port(<<P:1/binary, Buffer/binary>>, Acc) ->
     extract_sip_port(Buffer, [P | Acc]).
 
@@ -359,15 +383,27 @@ extract_sip_params(<<"?", Buffer/binary>>, Params) ->
 extract_sip_params(<<" ", _/binary>> = Buffer, Params) ->
     % no headers, at line ending
     {Params, [], Buffer};
-extract_sip_params(<<"\r\n", _/binary>> = Buffer, Params) ->
+
+extract_sip_params(<<"\r\n ", Buffer/binary>>, Params) ->
+    % line ending with a space, params continue
+    extract_sip_params(Buffer, Params);
+extract_sip_params(<<"\r\n\t", Buffer/binary>>, Params) ->
+    % line ending with a horiz-tab, params continue
+    extract_sip_params(Buffer, Params);
+extract_sip_params(<<"\r\n", Buffer/binary>>, Params) ->
     % no headers, at line ending
     {Params, [], Buffer};
+
+extract_sip_params(<<"\n ", Buffer/binary>>, Params) ->
+    % line ending with a space, params continue
+    extract_sip_params(Buffer, Params);
+extract_sip_params(<<"\n\t", Buffer/binary>>, Params) ->
+    % line ending with a horiz-tab, params continue
+    extract_sip_params(Buffer, Params);
 extract_sip_params(<<"\n", _/binary>> = Buffer, Params) ->
     % no headers, at line ending
     {Params, [], Buffer};
-%% extract_sip_params(<<";", Buffer/binary>>, Params) ->
-%%     % delimiter to start params
-%%     extract_sip_params(Buffer, Params);
+
 extract_sip_params(<<";transport=", Buffer/binary>>, #sip_uri_params{transport=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
     case is_known_transport(V) of
@@ -376,33 +412,49 @@ extract_sip_params(<<";transport=", Buffer/binary>>, #sip_uri_params{transport=u
     end;
 extract_sip_params(<<";maddr=", Buffer/binary>>, #sip_uri_params{maddr=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
-    extract_sip_params(Buffer1, Params#sip_uri_params{maddr=wh_util:to_lower_binary(V)});
+    extract_sip_params(extract_while(extract_while(Buffer1, lws), ws)
+                       ,Params#sip_uri_params{maddr=wh_util:to_lower_binary(V)}
+                      );
 extract_sip_params(<<";ttl=", Buffer/binary>>, #sip_uri_params{ttl=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
-    extract_sip_params(Buffer1, Params#sip_uri_params{ttl=wh_util:to_integer(V)});
+    extract_sip_params(extract_while(extract_while(Buffer1, lws), ws)
+                       ,Params#sip_uri_params{ttl=wh_util:to_integer(V)}
+                      );
 extract_sip_params(<<";user=", Buffer/binary>>, #sip_uri_params{user=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
-    extract_sip_params(Buffer1, Params#sip_uri_params{user=wh_util:to_lower_binary(V)});
+    extract_sip_params(extract_while(extract_while(Buffer1, lws), ws)
+                       ,Params#sip_uri_params{user=wh_util:to_lower_binary(V)}
+                      );
 extract_sip_params(<<";lr", Buffer/binary>>, #sip_uri_params{lr=undefined}=Params) ->
     %% not the greatest way to determine if this is the lr, or a lr.+ param
-    extract_sip_params(Buffer, Params#sip_uri_params{lr=true});
+    extract_sip_params(extract_while(extract_while(Buffer, lws), ws)
+                       ,Params#sip_uri_params{lr=true}
+                      );
 extract_sip_params(<<";method=", Buffer/binary>>, #sip_uri_params{method=undefined}=Params) ->
     {V, Buffer1} = extract_sip_param_value(Buffer),
     case is_known_method(V) of
-        {true, M} -> extract_sip_params(Buffer1, Params#sip_uri_params{method=M});
+        {true, M} -> extract_sip_params(extract_while(extract_while(Buffer1, lws), ws)
+                                        ,Params#sip_uri_params{method=M}
+                                       );
         false -> {error, 400}
     end;
 extract_sip_params(<<">", Buffer/binary>>, Params) ->
     % end of the URI sometimes
-    extract_sip_params(Buffer, Params);
+    extract_sip_params(extract_while(extract_while(Buffer, lws), ws)
+                       ,Params
+                      );
 extract_sip_params(Buffer, #sip_uri_params{other=Other}=Params) ->
     {Key, Buffer1} = extract_sip_param_key(Buffer),
     case props:get_value(Key, Other) of
         undefined ->
             {V, Buffer2} = extract_sip_param_value(Buffer1),
             case V of
-                <<>> -> extract_sip_params(Buffer2, Params#sip_uri_params{other=[{Key, true}|Other]});
-                _ -> extract_sip_params(Buffer2, Params#sip_uri_params{other=[{Key, V}|Other]})
+                <<>> -> extract_sip_params(extract_while(extract_while(Buffer2, lws), ws)
+                                           ,Params#sip_uri_params{other=[{Key, true}|Other]}
+                                          );
+                _ -> extract_sip_params(extract_while(extract_while(Buffer2, lws), ws)
+                                        ,Params#sip_uri_params{other=[{Key, V}|Other]}
+                                       )
             end;
         _V ->
             %% key has been defined, error!
@@ -503,7 +555,16 @@ extract_until(<<T:1/binary, Buffer/binary>>, Terminator, Opt, Acc) ->
     extract_until(Buffer, Terminator, Opt, [T | Acc]).
 
 %% pop off Terminator until a non-terminator character is encountered
--spec extract_while/2 :: (binary(), char()) -> binary().
+-spec extract_while/2 :: (binary(), char() | 'lws' | 'hcolon' | 'ws') -> binary().
+extract_while(<<"\r\n\t", Buffer/binary>>, lws) -> extract_while(Buffer, lws);
+extract_while(<<"\r\n ", Buffer/binary>>, lws) -> extract_while(Buffer, lws);
+
+extract_while(<<$\t, Buffer/binary>>, ws) -> extract_while(Buffer, ws);
+extract_while(<<$ , Buffer/binary>>, ws) -> extract_while(Buffer, ws);
+
+extract_while(<<"\r\n", Buffer/binary>>, hcolon) -> extract_while(Buffer, hcolon);
+extract_while(<<" ", Buffer/binary>>, hcolon) -> extract_while(Buffer, hcolon);
+
 extract_while(<<Terminator, Buffer/binary>>, Terminator) ->
     extract_while(Buffer, Terminator);
 extract_while(Buffer, _) ->
@@ -629,9 +690,10 @@ format_sip_header_value(_, V) -> V.
 
 -spec format_via/1 :: (ne_binary()) -> sip_via().
 format_via(<<"SIP", Buffer/binary>>) ->
-    {terminator, _, <<"2.0", Buffer1/binary>>} = extract_until(Buffer, $/), % clear whitespace
-    {terminator, _, Buffer2} = extract_until(Buffer1, $/), % clear whitespace up to transport
-    {Via, _} = extract_via_transport(Buffer2),
+    {terminator, _T, Buffer1} = extract_until(Buffer, $/),
+    <<"2.0", Buffer2/binary>> = extract_while(Buffer1, $ ),
+    {terminator, _, Buffer3} = extract_until(Buffer2, $/),
+    {Via, _} = extract_via_transport(extract_while(Buffer3, $ )),
     Via.
 
 extract_via_transport(Buffer) ->
@@ -641,7 +703,7 @@ extract_via_transport(Buffer) ->
                 {true, Transport} ->
                     {H, Buffer2} = extract_via_host(Buffer1),
                     {P, Buffer3} = extract_via_port(Buffer2),
-                    {Params, Buffer4} = extract_via_params(Buffer3),
+                    {Params, _Hdrs, Buffer4} = extract_sip_params_headers(Buffer3),
                     {#sip_via{transport=Transport
                               ,host=H
                               ,port=P
@@ -659,6 +721,8 @@ extract_via_host(Buffer) ->
     extract_via_host(extract_while(Buffer, $ ), []).
 
 extract_via_host(<<":", Buffer/binary>>, Acc) ->
+    {list_to_binary(lists:reverse(Acc)), Buffer};
+extract_via_host(<<";", _/binary>> = Buffer, Acc) ->
     {list_to_binary(lists:reverse(Acc)), Buffer};
 extract_via_host(<<" ", Buffer/binary>>, Acc) ->
     {list_to_binary(lists:reverse(Acc)), Buffer};
@@ -685,10 +749,6 @@ extract_via_port(<<>>, Acc) ->
     {wh_util:to_integer(lists:reverse(Acc)), <<>>};
 extract_via_port(<<P, Buffer/binary>>, Acc) ->
     extract_via_port(Buffer, [P | Acc]).
-
-%% TODO: flesh this out
-extract_via_params(Buffer) ->
-    #sip_uri_params{}.
 
 -spec format_allow_methods/1 :: (ne_binary()) -> [sip_method()].
 format_allow_methods(Buffer) ->
@@ -845,7 +905,6 @@ unhex(C) when C >= $A, C =< $F -> C - $A + 10;
 unhex(C) when C >= $a, C =< $f -> C - $a + 10;
 unhex(_) -> exit(badarg).
 
--include_lib("eunit/include/eunit.hrl").
 -ifdef(TEST).
 
 sip_uri_full_test() ->
@@ -1279,5 +1338,67 @@ sip_uri_lr_param_test() ->
     ?assertEqual('true', LR),
     ?assertEqual([], O).
 
+via_value_test() ->
+    Via = <<"SIP  /  2.0  /  UDP first.example.com: 4000;ttl=16\r\n\t;maddr=224.2.0.1 ;branch=z9hG4bKa7c6a8dlze.1">>,
+    #sip_via{version=Ver
+             ,transport=TP
+             ,host=H
+             ,port=P
+             ,params = Params
+            } = format_sip_header_value('Via', Via),
+    ?assertEqual(?SIP_VERSION_2_0, Ver),
+    ?assertEqual('udp', TP),
+    ?assertEqual(<<"first.example.com">>, H),
+    ?assertEqual(4000, P),
+
+    #sip_uri_params{
+                  ttl=TTL
+                  ,maddr=Maddr
+                  ,other=O
+                 } = Params,
+    ?assertEqual(16, TTL),
+    ?assertEqual(<<"224.2.0.1">>, Maddr),
+
+    ?assertEqual(<<"z9hg4bka7c6a8dlze.1">>, props:get_value(<<"branch">>, O)).
+
+via_header_test() ->
+    Via = <<"SIP/2.0/UDP 192.168.1.1;rport;branch=z9hG4bK17DUN85HDeFyQ">>,
+    #sip_via{version=Ver
+             ,transport=TP
+             ,host=H
+             ,port=P
+             ,params = Params
+            } = format_sip_header_value('Via', Via),
+    ?assertEqual(?SIP_VERSION_2_0, Ver),
+    ?assertEqual('udp', TP),
+    ?assertEqual(<<"192.168.1.1">>, H),
+    ?assertEqual('undefined', P),
+
+    #sip_uri_params{
+                  ttl=TTL
+                  ,maddr=Maddr
+                  ,other=O
+                 } = Params,
+    ?assertEqual('undefined', TTL),
+    ?assertEqual('undefined', Maddr),
+    ?assertEqual(<<"z9hg4bk17dun85hdefyq">>, props:get_value(<<"branch">>, O)),
+    ?assertEqual(true, props:get_value(<<"rport">>, O)).
+
+sip_packet_invite_test() ->
+    SIP = <<"INVITE sip:alice@192.168.1.176 SIP/2.0\r\nVia: SIP/2.0/UDP 192.168.1.45;rport;branch=z9hG4bK2mBSta3rrB99D\r\nMax-Forwards: 70\r\nFrom: \"\" <sip:0000000000@192.168.1.45>;tag=vQ763mmXmygHQ\r\nTo: <sip:alice@192.168.1.176>\r\nCall-ID: 48f3d911-7340-4888-a33f-0ad10f6d0a37\r\nCSeq: 30461563 INVITE\r\nContact: <sip:mod_sofia@192.168.1.45:5060>\r\nUser-Agent: The 2600hz Project\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS, MESSAGE, UPDATE, INFO, REGISTER, REFER, NOTIFY, PUBLISH, SUBSCRIBE\r\nSupported: precondition, path, replaces\r\nAllow-Events: talk, hold, presence, dialog, line-seize, call-info, sla, include-session-description, presence.winfo, message-summary, refer\r\nContent-Type: application/sdp\r\nContent-Disposition: session\r\nContent-Length: 420\r\nX-FS-Support: update_display,send_info\r\nRemote-Party-ID: <sip:0000000000@192.168.1.45>;party=calling;screen=yes;privacy=off\r\n\r\nv=0\r\no=FreeSWITCH 1341566127 1341566128 IN IP4 192.168.1.45\r\ns=FreeSWITCH\r\nc=IN IP4 192.168.1.45\r\nt=0 0\r\nm=audio 29018 RTP/AVP 99 100 9 0 8 3 101 13\r\na=rtpmap:99 G7221/32000\r\na=fmtp:99 bitrate=48000\r\na=rtpmap:100 G7221/16000\r\na=fmtp:100 bitrate=32000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\na=ptime:20\r\nm=video 26066 RTP/AVP 31 34 98\r\na=rtpmap:31 H261/90000\r\na=rtpmap:34 H263/90000\r\na=rtpmap:98 H264/90000\r\n">>,
+    {ok, Req} = parse_sip_packet(SIP),
+
+    ?assertEqual('INVITE', smoke_sip_req:method(Req)),
+    ?assertEqual(<<"sip:alice@192.168.1.176">>, smoke_sip_req:pp_uri(smoke_sip_req:request_uri(Req), binary)),
+    ?assertEqual(<<"\"\" <sip:0000000000@192.168.1.45>;tag=vq763mmxmyghq">>, smoke_sip_req:pp_uri(smoke_sip_req:header(Req, 'From'), binary)),
+    ?assertEqual({<<"application">>, <<"sdp">>, []}, smoke_sip_req:header(Req, 'Content-Type')),
+    ?assertEqual({30461563, 'INVITE'}, smoke_sip_req:header(Req, 'CSeq')),
+
+    ContentLength = smoke_sip_req:header(Req, 'Content-Length'),
+    ReqBody = smoke_sip_req:request_body(Req),
+    ?assertEqual(420, ContentLength),
+    ?assertEqual(ContentLength, byte_size(ReqBody)),
+
+    ?assertEqual(<<"v=0\r\no=FreeSWITCH 1341566127 1341566128 IN IP4 192.168.1.45\r\ns=FreeSWITCH\r\nc=IN IP4 192.168.1.45\r\nt=0 0\r\nm=audio 29018 RTP/AVP 99 100 9 0 8 3 101 13\r\na=rtpmap:99 G7221/32000\r\na=fmtp:99 bitrate=48000\r\na=rtpmap:100 G7221/16000\r\na=fmtp:100 bitrate=32000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\na=ptime:20\r\nm=video 26066 RTP/AVP 31 34 98\r\na=rtpmap:31 H261/90000\r\na=rtpmap:34 H263/90000\r\na=rtpmap:98 H264/90000\r\n">>, ReqBody).
 
 -endif.
