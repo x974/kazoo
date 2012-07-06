@@ -400,7 +400,10 @@ extract_sip_params(Buffer, #sip_uri_params{other=Other}=Params) ->
     case props:get_value(Key, Other) of
         undefined ->
             {V, Buffer2} = extract_sip_param_value(Buffer1),
-            extract_sip_params(Buffer2, Params#sip_uri_params{other=[{Key, V}|Other]});
+            case V of
+                <<>> -> extract_sip_params(Buffer2, Params#sip_uri_params{other=[{Key, true}|Other]});
+                _ -> extract_sip_params(Buffer2, Params#sip_uri_params{other=[{Key, V}|Other]})
+            end;
         _V ->
             %% key has been defined, error!
             {error, 400}
@@ -411,9 +414,12 @@ extract_sip_param_key(Buffer) ->
     extract_sip_param_key(Buffer, []).
 extract_sip_param_key(<<"=", Buffer/binary>>, Acc) ->
     {decode(lists:reverse(Acc)), Buffer};
-extract_sip_param_key(<<";", Buffer/binary>>, _) ->
+extract_sip_param_key(<<";", Buffer/binary>>, []) ->
     %% start of a key
     extract_sip_param_key(Buffer, []);
+extract_sip_param_key(<<";", _/binary>> = Buffer, Acc) ->
+    %% key with no value
+    {decode(lists:reverse(Acc)), Buffer};
 extract_sip_param_key(<<K:1/binary, Buffer/binary>>, Acc) ->
     extract_sip_param_key(Buffer, [K | Acc]).
 
@@ -1196,7 +1202,7 @@ sip_uri_display_name_quoted_test() ->
     ?assertEqual([], O).
 
 sip_uri_display_name_tags_test() ->
-    Uri = <<"\"\" <sip:0000000000@192.168.1.1>;tag=3et3X2avH64Xr">>,
+    Uri = <<"\"\" <sip:0000000000@192.168.1.1>;rport;tag=3et3X2avH64Xr">>,
     {#sip_uri{
         display_name=DN
         ,scheme=Scheme
@@ -1232,7 +1238,7 @@ sip_uri_display_name_tags_test() ->
     ?assertEqual('undefined', User),
     ?assertEqual('undefined', Me),
     ?assertEqual('undefined', LR),
-    ?assertEqual([{<<"tag">>, <<"3et3x2avh64xr">>}], O).
+    ?assertEqual([{<<"tag">>, <<"3et3x2avh64xr">>},{<<"rport">>, true}], O).
 
 sip_uri_lr_param_test() ->
     Uri = <<"<sip:alice@192.168.1.1;lr>">>,
