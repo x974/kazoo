@@ -98,9 +98,7 @@ parse_request(#state{buffer=Buffer, max_line_length=MaxLength}=State) ->
     lager:debug("buffer s: ~b(~b)", [byte_size(Buffer), MaxLength]),
     case smoke_sip:parse_sip_packet(Buffer) of
         {error, Code} -> error_terminate(Code, State);
-        {ok, Req} ->
-            io:format("req: ~p~n", [Req]),
-            ok
+        {ok, Req} -> dispatch(Req, State)
     end.
 
 %% -spec wait_header/2 :: (smoke_sip_req:sip_req(), #state{}) -> 'ok'.

@@ -59,7 +59,6 @@ receiver(Socket, Protocol, ProtoOpts) ->
             smoke_protocol_sup:start_request(Socket, ?MODULE, Protocol, ProtoOpts, Payload),
             receiver(Socket, Protocol, ProtoOpts);
         {error, timeout} -> 
-            lager:debug("timed out waiting for a packet, trying again"),
             receiver(Socket, Protocol, ProtoOpts);
         {error, _E} ->
             lager:debug("error waiting for a packet: ~p", [_E]),
