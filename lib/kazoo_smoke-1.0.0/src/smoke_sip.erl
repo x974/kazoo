@@ -116,13 +116,8 @@ parse_sip_packet(Buffer, M, RUri) ->
         {error, _}=E -> E;
         {Vsn, Buffer1} -> parse_sip_packet(Buffer1, M, RUri, Vsn)
     end.
-parse_sip_packet(Buffer, M, #sip_uri{user=U, host=H}=RUri, _Vsn) ->
-    lager:info("recv ~s request for: ~s@~s", [M, U, H]),
-
+parse_sip_packet(Buffer, M, #sip_uri{}=RUri, _Vsn) ->
     {SipHeaders, Body} = parse_sip_headers(Buffer),
-
-    lager:debug("body: ~p", [Body]),
-
     Req = lists:foldl(fun({F, D}, R) -> smoke_sip_req:F(R, D) end
                       ,smoke_sip_req:new()
                       ,[{set_method, M}
@@ -146,9 +141,9 @@ parse_sip_headers(<<>>, Headers, _) ->
     {Headers, <<>>};
 parse_sip_headers(<<" ", Buffer/binary>>, Headers, HeaderKey) ->
     %% ignore whitespace between Key and :
-    parse_sip_headers(Buffer, Headers, HeaderKey);
+    parse_sip_headers(extract_while(Buffer, ws), Headers, HeaderKey);
 parse_sip_headers(<<":", Buffer/binary>>, Headers, HeaderKey) ->
-    case parse_sip_header_value(Buffer, list_to_binary(lists:reverse(HeaderKey))) of
+    case parse_sip_header_value(extract_while(Buffer, ws), list_to_binary(lists:reverse(HeaderKey))) of
         {error, _}=E -> E;
         {Buffer1, K, V} -> parse_sip_headers(Buffer1, [{K,V} | Headers], [])
     end;
@@ -162,7 +157,6 @@ parse_sip_header_value(<<" ", Buffer/binary>>, Key) ->
     %% remove whitespace after the :
     parse_sip_header_value(Buffer, Key);
 parse_sip_header_value(Buffer, Key) ->
-    lager:debug("parsing key '~s' from '~s'", [Key, Buffer]),
     case is_known_header(Key) of
         {true, Header} -> parse_sip_header_value(Buffer, Header, []);
         false -> parse_sip_header_value(Buffer, Key, [])
@@ -171,7 +165,6 @@ parse_sip_header_value(Buffer, Key) ->
 parse_sip_header_value(<<"\r\n\r\n", _/binary>> = Buffer, Key, Acc) ->
     %% otherwise, newline indicates end of value collection
     V = list_to_binary(lists:reverse(Acc)),
-    lager:debug("header '~s': '~s'", [Key, V]),
     {Buffer, Key, format_sip_header_value(Key, V)};
 parse_sip_header_value(<<"\r\n ", Buffer/binary>>, Key, Acc) ->
     %% newline with a space - continued value
@@ -182,12 +175,10 @@ parse_sip_header_value(<<"\r\n\t", Buffer/binary>>, Key, Acc) ->
 parse_sip_header_value(<<"\r\n", Buffer/binary>>, Key, Acc) ->
     %% otherwise, newline indicates end of value collection
     V = list_to_binary(lists:reverse(Acc)),
-    lager:debug("header '~s': '~s'", [Key, V]),
     {Buffer, Key, format_sip_header_value(Key, V)};
 parse_sip_header_value(<<"\n", Buffer/binary>>, Key, Acc) ->
     %% otherwise, newline indicates end of value collection
     V = list_to_binary(lists:reverse(Acc)),
-    lager:debug("header '~s': '~s'", [Key, V]),
     {Buffer, Key, format_sip_header_value(Key, V)};
 parse_sip_header_value(<<V, Buffer/binary>>, Key, Acc) ->
     parse_sip_header_value(Buffer, Key, [V | Acc]).
@@ -605,7 +596,6 @@ format_sip_header_value('Max-Forwards', V) ->
 format_sip_header_value('CSeq', V) ->
     case extract_until(V, $ ) of
         {terminator, Seq, M} ->
-            lager:debug("seq: ~s method: ~s", [Seq, M]),
             SeqN = case wh_util:to_integer(Seq) of N when N < 2147483648 -> N end, % Seq must be < 2^31
             {true, Method} = is_known_method(M),
             {SeqN, Method}
@@ -1386,6 +1376,7 @@ via_header_test() ->
 
 sip_packet_invite_test() ->
     SIP = <<"INVITE sip:alice@192.168.1.176 SIP/2.0\r\nVia: SIP/2.0/UDP 192.168.1.45;rport;branch=z9hG4bK2mBSta3rrB99D\r\nMax-Forwards: 70\r\nFrom: \"\" <sip:0000000000@192.168.1.45>;tag=vQ763mmXmygHQ\r\nTo: <sip:alice@192.168.1.176>\r\nCall-ID: 48f3d911-7340-4888-a33f-0ad10f6d0a37\r\nCSeq: 30461563 INVITE\r\nContact: <sip:mod_sofia@192.168.1.45:5060>\r\nUser-Agent: The 2600hz Project\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS, MESSAGE, UPDATE, INFO, REGISTER, REFER, NOTIFY, PUBLISH, SUBSCRIBE\r\nSupported: precondition, path, replaces\r\nAllow-Events: talk, hold, presence, dialog, line-seize, call-info, sla, include-session-description, presence.winfo, message-summary, refer\r\nContent-Type: application/sdp\r\nContent-Disposition: session\r\nContent-Length: 420\r\nX-FS-Support: update_display,send_info\r\nRemote-Party-ID: <sip:0000000000@192.168.1.45>;party=calling;screen=yes;privacy=off\r\n\r\nv=0\r\no=FreeSWITCH 1341566127 1341566128 IN IP4 192.168.1.45\r\ns=FreeSWITCH\r\nc=IN IP4 192.168.1.45\r\nt=0 0\r\nm=audio 29018 RTP/AVP 99 100 9 0 8 3 101 13\r\na=rtpmap:99 G7221/32000\r\na=fmtp:99 bitrate=48000\r\na=rtpmap:100 G7221/16000\r\na=fmtp:100 bitrate=32000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\na=ptime:20\r\nm=video 26066 RTP/AVP 31 34 98\r\na=rtpmap:31 H261/90000\r\na=rtpmap:34 H263/90000\r\na=rtpmap:98 H264/90000\r\n">>,
+
     {ok, Req} = parse_sip_packet(SIP),
 
     ?assertEqual('INVITE', smoke_sip_req:method(Req)),
@@ -1400,5 +1391,13 @@ sip_packet_invite_test() ->
     ?assertEqual(ContentLength, byte_size(ReqBody)),
 
     ?assertEqual(<<"v=0\r\no=FreeSWITCH 1341566127 1341566128 IN IP4 192.168.1.45\r\ns=FreeSWITCH\r\nc=IN IP4 192.168.1.45\r\nt=0 0\r\nm=audio 29018 RTP/AVP 99 100 9 0 8 3 101 13\r\na=rtpmap:99 G7221/32000\r\na=fmtp:99 bitrate=48000\r\na=rtpmap:100 G7221/16000\r\na=fmtp:100 bitrate=32000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\na=ptime:20\r\nm=video 26066 RTP/AVP 31 34 98\r\na=rtpmap:31 H261/90000\r\na=rtpmap:34 H263/90000\r\na=rtpmap:98 H264/90000\r\n">>, ReqBody).
+
+sip_packet_invite_speedtest() ->
+        SIP = <<"INVITE sip:alice@192.168.1.176 SIP/2.0\r\nVia: SIP/2.0/UDP 192.168.1.45;rport;branch=z9hG4bK2mBSta3rrB99D\r\nMax-Forwards: 70\r\nFrom: \"\" <sip:0000000000@192.168.1.45>;tag=vQ763mmXmygHQ\r\nTo: <sip:alice@192.168.1.176>\r\nCall-ID: 48f3d911-7340-4888-a33f-0ad10f6d0a37\r\nCSeq: 30461563 INVITE\r\nContact: <sip:mod_sofia@192.168.1.45:5060>\r\nUser-Agent: The 2600hz Project\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS, MESSAGE, UPDATE, INFO, REGISTER, REFER, NOTIFY, PUBLISH, SUBSCRIBE\r\nSupported: precondition, path, replaces\r\nAllow-Events: talk, hold, presence, dialog, line-seize, call-info, sla, include-session-description, presence.winfo, message-summary, refer\r\nContent-Type: application/sdp\r\nContent-Disposition: session\r\nContent-Length: 420\r\nX-FS-Support: update_display,send_info\r\nRemote-Party-ID: <sip:0000000000@192.168.1.45>;party=calling;screen=yes;privacy=off\r\n\r\nv=0\r\no=FreeSWITCH 1341566127 1341566128 IN IP4 192.168.1.45\r\ns=FreeSWITCH\r\nc=IN IP4 192.168.1.45\r\nt=0 0\r\nm=audio 29018 RTP/AVP 99 100 9 0 8 3 101 13\r\na=rtpmap:99 G7221/32000\r\na=fmtp:99 bitrate=48000\r\na=rtpmap:100 G7221/16000\r\na=fmtp:100 bitrate=32000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\na=ptime:20\r\nm=video 26066 RTP/AVP 31 34 98\r\na=rtpmap:31 H261/90000\r\na=rtpmap:34 H263/90000\r\na=rtpmap:98 H264/90000\r\n">>,
+
+    Now = erlang:now(),
+    {ok, _} = parse_sip_packet(SIP),
+    Elapsed = wh_util:elapsed_us(Now),
+    lager:info("parsing took ~p us", [Elapsed]).
 
 -endif.
