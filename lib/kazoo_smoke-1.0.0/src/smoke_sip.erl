@@ -363,7 +363,7 @@ extract_sip_port(<<P:1/binary, Buffer/binary>>, Acc) ->
 
 -spec extract_sip_params_headers/1 :: (ne_binary()) -> {ne_binary(), binary(), ne_binary()}.
 extract_sip_params_headers(Buffer) ->
-    extract_sip_params(Buffer, #sip_uri_params{}).
+    extract_sip_params(Buffer, []).
 
 extract_sip_params(<<>>, Params) ->
     {Params, [], <<>>};
@@ -394,57 +394,24 @@ extract_sip_params(<<"\n\t", Buffer/binary>>, Params) ->
 extract_sip_params(<<"\n", _/binary>> = Buffer, Params) ->
     % no headers, at line ending
     {Params, [], Buffer};
-
-extract_sip_params(<<";transport=", Buffer/binary>>, #sip_uri_params{transport=undefined}=Params) ->
-    {V, Buffer1} = extract_sip_param_value(Buffer),
-    case is_known_transport(V) of
-        {true, T} -> extract_sip_params(Buffer1, Params#sip_uri_params{transport=T});
-        false -> {error, 400}
-    end;
-extract_sip_params(<<";maddr=", Buffer/binary>>, #sip_uri_params{maddr=undefined}=Params) ->
-    {V, Buffer1} = extract_sip_param_value(Buffer),
-    extract_sip_params(extract_while(extract_while(Buffer1, lws), ws)
-                       ,Params#sip_uri_params{maddr=wh_util:to_lower_binary(V)}
-                      );
-extract_sip_params(<<";ttl=", Buffer/binary>>, #sip_uri_params{ttl=undefined}=Params) ->
-    {V, Buffer1} = extract_sip_param_value(Buffer),
-    extract_sip_params(extract_while(extract_while(Buffer1, lws), ws)
-                       ,Params#sip_uri_params{ttl=wh_util:to_integer(V)}
-                      );
-extract_sip_params(<<";user=", Buffer/binary>>, #sip_uri_params{user=undefined}=Params) ->
-    {V, Buffer1} = extract_sip_param_value(Buffer),
-    extract_sip_params(extract_while(extract_while(Buffer1, lws), ws)
-                       ,Params#sip_uri_params{user=wh_util:to_lower_binary(V)}
-                      );
-extract_sip_params(<<";lr", Buffer/binary>>, #sip_uri_params{lr=undefined}=Params) ->
-    %% not the greatest way to determine if this is the lr, or a lr.+ param
-    extract_sip_params(extract_while(extract_while(Buffer, lws), ws)
-                       ,Params#sip_uri_params{lr=true}
-                      );
-extract_sip_params(<<";method=", Buffer/binary>>, #sip_uri_params{method=undefined}=Params) ->
-    {V, Buffer1} = extract_sip_param_value(Buffer),
-    case is_known_method(V) of
-        {true, M} -> extract_sip_params(extract_while(extract_while(Buffer1, lws), ws)
-                                        ,Params#sip_uri_params{method=M}
-                                       );
-        false -> {error, 400}
-    end;
 extract_sip_params(<<">", Buffer/binary>>, Params) ->
     % end of the URI sometimes
     extract_sip_params(extract_while(extract_while(Buffer, lws), ws)
                        ,Params
                       );
-extract_sip_params(Buffer, #sip_uri_params{other=Other}=Params) ->
+extract_sip_params(Buffer, Params) ->
     {Key, Buffer1} = extract_sip_param_key(Buffer),
-    case props:get_value(Key, Other) of
+    case props:get_value(Key, Params) of
         undefined ->
             {V, Buffer2} = extract_sip_param_value(Buffer1),
             case V of
                 <<>> -> extract_sip_params(extract_while(extract_while(Buffer2, lws), ws)
-                                           ,Params#sip_uri_params{other=[{Key, true}|Other]}
+                                           ,[{Key, true}|Params]
                                           );
                 _ -> extract_sip_params(extract_while(extract_while(Buffer2, lws), ws)
-                                        ,Params#sip_uri_params{other=[{Key, V}|Other]}
+                                        ,[{Key, format_sip_uri_param(Key, V)}
+                                          |Params
+                                         ]
                                        )
             end;
         _V ->
@@ -463,6 +430,12 @@ extract_sip_param_key(<<";", Buffer/binary>>, []) ->
 extract_sip_param_key(<<";", _/binary>> = Buffer, Acc) ->
     %% key with no value
     {decode(lists:reverse(Acc)), Buffer};
+extract_sip_param_key(<<">", _/binary>> = Buffer, Acc) ->
+    %% end of a key with no value and end of params
+    {decode(lists:reverse(Acc)), Buffer};
+extract_sip_param_key(<<"?", _/binary>> = Buffer, Acc) ->
+    %% end of a key with no value and end of params, start of headers
+    {decode(lists:reverse(Acc)), Buffer};
 extract_sip_param_key(<<K:1/binary, Buffer/binary>>, Acc) ->
     extract_sip_param_key(Buffer, [K | Acc]).
 
@@ -478,6 +451,11 @@ extract_sip_param_value(<<"?", _/binary>> = Buffer, Acc) ->
     {decode(lists:reverse(Acc)), Buffer};
 extract_sip_param_value(<<" ", _/binary>> = Buffer, Acc) ->
     % end of URI
+    {decode(lists:reverse(Acc)), Buffer};
+extract_sip_param_value(<<">", _/binary>> = Buffer, []) ->
+    {true, Buffer};
+extract_sip_param_value(<<">", _/binary>> = Buffer, Acc) ->
+    % end of value
     {decode(lists:reverse(Acc)), Buffer};
 extract_sip_param_value(<<"\r\n", _/binary>> = Buffer, Acc) ->
     % end of line
@@ -666,8 +644,6 @@ format_sip_header_value('Timestamp', V) ->
     wh_util:to_integer(V);
 
 format_sip_header_value(_, V) -> V.
-
-
     %%                         %% Optional Headers
     %%                         'Alert-Info', 'Authentication-Info',
     %%                         'Authorization', 'Call-Info', 'Content-Disposition',
@@ -677,6 +653,26 @@ format_sip_header_value(_, V) -> V.
     %%                         'Record-Route', 'Require'
     %%                         'Route', 'Supported'
     %%                         'Unsupported', 'Warning', 'WWW-Authenticate') -> 
+
+-spec format_sip_uri_param/2 :: (ne_binary(), ne_binary() | 'true') -> ne_binary() | integer() |
+                                                                       sip_method() | sip_transport().
+format_sip_uri_param(<<"transport">>, V) ->
+    case is_known_transport(V) of
+        {true, T} -> T;
+        false -> throw({error, 400})
+    end;
+format_sip_uri_param(<<"method">>, V) ->
+    case is_known_method(V) of
+        {true, M} -> M;
+        false -> throw({error, 400})
+    end;
+format_sip_uri_param(<<"maddr">>, V) ->
+    wh_util:to_lower_binary(V);
+format_sip_uri_param(<<"ttl">>, V) ->
+    wh_util:to_integer(V);
+format_sip_uri_param(<<"user">>, V) ->
+    wh_util:to_lower_binary(V);
+format_sip_uri_param(_K, V) -> V.
 
 -spec format_via/1 :: (ne_binary()) -> sip_via().
 format_via(<<"SIP", Buffer/binary>>) ->
@@ -919,22 +915,12 @@ sip_uri_full_test() ->
     ?assertEqual('undefined', Port),
     ?assertEqual([{<<"day">>, <<"tuesday">>}], Hdrs),
 
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual(<<"239.255.255.1">>, Ma),
-    ?assertEqual(15, TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('INVITE', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([], O).
+    ?assertEqual('undefined', props:get_value(<<"transport">>, Params)),
+    ?assertEqual(<<"239.255.255.1">>, props:get_value(<<"maddr">>, Params)),
+    ?assertEqual(15, props:get_value(<<"ttl">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"user">>, Params)),
+    ?assertEqual('INVITE', props:get_value(<<"method">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"lr">>, Params)).
 
 sip_uri_host_only_test() ->
     Uri = <<"sip:atlanta.com;method=REGISTER?to=alice%40atlanta.com">>,
@@ -958,22 +944,12 @@ sip_uri_host_only_test() ->
     ?assertEqual('undefined', Port),
     ?assertEqual([{<<"to">>, <<"alice@atlanta.com">>}], Hdrs),
 
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('REGISTER', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([], O).
+    ?assertEqual('undefined', props:get_value(<<"transport">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"maddr">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"ttl">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"user">>, Params)),
+    ?assertEqual('REGISTER', props:get_value(<<"method">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"lr">>, Params)).
 
 sip_uri_weird_username_test() ->
     Uri = <<"sips:alice;day=tuesday@atlanta.com">>,
@@ -996,23 +972,7 @@ sip_uri_weird_username_test() ->
     ?assertEqual(<<"atlanta.com">>, H),
     ?assertEqual('undefined', Port),
     ?assertEqual([], Hdrs),
-
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('undefined', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([], O).
+    ?assertEqual([], Params).
 
 sip_uri_user_and_ip_test() ->
     Uri = <<"sip:alice@192.168.1.1 ignore">>,
@@ -1037,23 +997,7 @@ sip_uri_user_and_ip_test() ->
     ?assertEqual(<<"192.168.1.1">>, H),
     ?assertEqual('undefined', Port),
     ?assertEqual([], Hdrs),
-
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('undefined', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([], O).
+    ?assertEqual([], Params).
 
 sip_uri_did_user_test() ->
     Uri = <<"sip:+1-212-555-1212:1234@gateway.com;user=phone">>,
@@ -1076,23 +1020,7 @@ sip_uri_did_user_test() ->
     ?assertEqual(<<"gateway.com">>, H),
     ?assertEqual('undefined', Port),
     ?assertEqual([], Hdrs),
-
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual(<<"phone">>, User),
-    ?assertEqual('undefined', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([], O).
+    ?assertEqual(<<"phone">>, props:get_value(<<"user">>, Params)).
 
 sip_uri_encoded_user_test() ->
     Uri = <<"sip:%61lice@atlanta.com;transport=TCP">>,
@@ -1116,22 +1044,12 @@ sip_uri_encoded_user_test() ->
     ?assertEqual('undefined', Port),
     ?assertEqual([], Hdrs),
 
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('tcp', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('undefined', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([], O).
+    ?assertEqual('tcp', props:get_value(<<"transport">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"maddr">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"ttl">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"user">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"method">>, Params)),
+    ?assertEqual('undefined', props:get_value(<<"lr">>, Params)).
 
 sip_uri_other_params_test() ->
     Uri = <<"sip:carol@chicago.com;newparam=5;method=REGISTER">>,
@@ -1155,22 +1073,8 @@ sip_uri_other_params_test() ->
     ?assertEqual('undefined', Port),
     ?assertEqual([], Hdrs),
 
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('REGISTER', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([{<<"newparam">>, <<"5">>}], O).
+    ?assertEqual('REGISTER', props:get_value(<<"method">>, Params)),
+    ?assertEqual(<<"5">>, props:get_value(<<"newparam">>, Params)).
 
 sip_uri_display_name_test() ->
     Uri = <<"Carol <sip:carol@chicago.com>">>,
@@ -1193,23 +1097,7 @@ sip_uri_display_name_test() ->
     ?assertEqual(<<"chicago.com">>, H),
     ?assertEqual('undefined', Port),
     ?assertEqual([], Hdrs),
-
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('undefined', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([], O).
+    ?assertEqual([], Params).
 
 sip_uri_display_name_quoted_test() ->
     Uri = <<"\"Carol\" <sip:carol@chicago.com>">>,
@@ -1232,23 +1120,7 @@ sip_uri_display_name_quoted_test() ->
     ?assertEqual(<<"chicago.com">>, H),
     ?assertEqual('undefined', Port),
     ?assertEqual([], Hdrs),
-
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('undefined', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([], O).
+    ?assertEqual([], Params).
 
 sip_uri_display_name_tags_test() ->
     Uri = <<"\"\" <sip:0000000000@192.168.1.1>;rport;tag=3et3X2avH64Xr">>,
@@ -1272,22 +1144,8 @@ sip_uri_display_name_tags_test() ->
     ?assertEqual('undefined', Port),
     ?assertEqual([], Hdrs),
 
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('undefined', Me),
-    ?assertEqual('undefined', LR),
-    ?assertEqual([{<<"tag">>, <<"3et3x2avh64xr">>},{<<"rport">>, true}], O).
+    ?assertEqual(<<"3et3x2avh64xr">>, props:get_value(<<"tag">>, Params)),
+    ?assertEqual('true', props:get_value(<<"rport">>, Params)).
 
 sip_uri_lr_param_test() ->
     Uri = <<"<sip:alice@192.168.1.1;lr>">>,
@@ -1310,23 +1168,7 @@ sip_uri_lr_param_test() ->
     ?assertEqual(<<"192.168.1.1">>, H),
     ?assertEqual('undefined', Port),
     ?assertEqual([], Hdrs),
-
-    #sip_uri_params{transport=Tr
-                    ,maddr=Ma
-                    ,ttl=TTL
-                    ,user=User
-                    ,method=Me
-                    ,lr=LR
-                    ,other=O
-                   } = Params,
-
-    ?assertEqual('undefined', Tr),
-    ?assertEqual('undefined', Ma),
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', User),
-    ?assertEqual('undefined', Me),
-    ?assertEqual('true', LR),
-    ?assertEqual([], O).
+    ?assertEqual(true, props:get_value(<<"lr">>, Params)).
 
 via_value_test() ->
     Via = <<"SIP  /  2.0  /  UDP first.example.com: 4000;ttl=16\r\n\t;maddr=224.2.0.1 ;branch=z9hG4bKa7c6a8dlze.1">>,
@@ -1341,15 +1183,9 @@ via_value_test() ->
     ?assertEqual(<<"first.example.com">>, H),
     ?assertEqual(4000, P),
 
-    #sip_uri_params{
-                  ttl=TTL
-                  ,maddr=Maddr
-                  ,other=O
-                 } = Params,
-    ?assertEqual(16, TTL),
-    ?assertEqual(<<"224.2.0.1">>, Maddr),
-
-    ?assertEqual(<<"z9hg4bka7c6a8dlze.1">>, props:get_value(<<"branch">>, O)).
+    ?assertEqual(16, props:get_value(<<"ttl">>, Params)),
+    ?assertEqual(<<"224.2.0.1">>, props:get_value(<<"maddr">>, Params)),
+    ?assertEqual(<<"z9hg4bka7c6a8dlze.1">>, props:get_value(<<"branch">>, Params)).
 
 via_header_test() ->
     Via = <<"SIP/2.0/UDP 192.168.1.1;rport;branch=z9hG4bK17DUN85HDeFyQ">>,
@@ -1364,15 +1200,8 @@ via_header_test() ->
     ?assertEqual(<<"192.168.1.1">>, H),
     ?assertEqual('undefined', P),
 
-    #sip_uri_params{
-                  ttl=TTL
-                  ,maddr=Maddr
-                  ,other=O
-                 } = Params,
-    ?assertEqual('undefined', TTL),
-    ?assertEqual('undefined', Maddr),
-    ?assertEqual(<<"z9hg4bk17dun85hdefyq">>, props:get_value(<<"branch">>, O)),
-    ?assertEqual(true, props:get_value(<<"rport">>, O)).
+    ?assertEqual(<<"z9hg4bk17dun85hdefyq">>, props:get_value(<<"branch">>, Params)),
+    ?assertEqual(true, props:get_value(<<"rport">>, Params)).
 
 sip_packet_invite_test() ->
     SIP = <<"INVITE sip:alice@192.168.1.176 SIP/2.0\r\nVia: SIP/2.0/UDP 192.168.1.45;rport;branch=z9hG4bK2mBSta3rrB99D\r\nMax-Forwards: 70\r\nFrom: \"\" <sip:0000000000@192.168.1.45>;tag=vQ763mmXmygHQ\r\nTo: <sip:alice@192.168.1.176>\r\nCall-ID: 48f3d911-7340-4888-a33f-0ad10f6d0a37\r\nCSeq: 30461563 INVITE\r\nContact: <sip:mod_sofia@192.168.1.45:5060>\r\nUser-Agent: The 2600hz Project\r\nAllow: INVITE, ACK, BYE, CANCEL, OPTIONS, MESSAGE, UPDATE, INFO, REGISTER, REFER, NOTIFY, PUBLISH, SUBSCRIBE\r\nSupported: precondition, path, replaces\r\nAllow-Events: talk, hold, presence, dialog, line-seize, call-info, sla, include-session-description, presence.winfo, message-summary, refer\r\nContent-Type: application/sdp\r\nContent-Disposition: session\r\nContent-Length: 420\r\nX-FS-Support: update_display,send_info\r\nRemote-Party-ID: <sip:0000000000@192.168.1.45>;party=calling;screen=yes;privacy=off\r\n\r\nv=0\r\no=FreeSWITCH 1341566127 1341566128 IN IP4 192.168.1.45\r\ns=FreeSWITCH\r\nc=IN IP4 192.168.1.45\r\nt=0 0\r\nm=audio 29018 RTP/AVP 99 100 9 0 8 3 101 13\r\na=rtpmap:99 G7221/32000\r\na=fmtp:99 bitrate=48000\r\na=rtpmap:100 G7221/16000\r\na=fmtp:100 bitrate=32000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\na=ptime:20\r\nm=video 26066 RTP/AVP 31 34 98\r\na=rtpmap:31 H261/90000\r\na=rtpmap:34 H263/90000\r\na=rtpmap:98 H264/90000\r\n">>,

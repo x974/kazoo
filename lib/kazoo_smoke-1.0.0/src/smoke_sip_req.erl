@@ -167,29 +167,16 @@ maybe_pp(undefined, _) -> <<>>;
 maybe_pp(true, ?NE_BINARY = V) -> V;
 maybe_pp(false, _) -> <<>>;
 maybe_pp(?NE_BINARY = V, Prefix) -> [maybe_pp(Prefix), V];
+maybe_pp(L, Sep) when is_list(L) ->
+    [ maybe_pp_kv(K, V, Sep) || {K, V} <- L];
 maybe_pp(V, Prefix) -> [maybe_pp(Prefix), wh_util:to_binary(V)].
 
 maybe_pp(true) -> <<>>;
 maybe_pp(false) -> <<>>;
 maybe_pp(undefined) -> <<>>;
 maybe_pp(V) when is_binary(V) -> V;
-maybe_pp(#sip_uri_params{
-            transport=T
-            ,maddr=Maddr
-            ,ttl=TTL
-            ,user=U
-            ,method=M
-            ,lr=LR
-            ,other=Ps
-           }) ->
-    [ maybe_pp(LR, <<";lr">>)
-      ,maybe_pp(T, <<";transport=">>)
-      ,maybe_pp(Maddr, <<";maddr=">>)
-      ,maybe_pp(TTL, <<";ttl=">>)
-      ,maybe_pp(U, <<";user=">>)
-      ,maybe_pp(M, <<";method=">>)
-      ,[ maybe_pp_kv(K, V, <<";">>) || {K, V} <- Ps]
-    ];
+maybe_pp(L) when is_list(L) ->
+    maybe_pp(L, <<";">>);
 maybe_pp(V) -> wh_util:to_binary(V).
 
 maybe_pp_kv(K, true) ->
@@ -207,9 +194,9 @@ maybe_pp_kv(K, V, Prefix) ->
 pp_sip_uri_test() ->
     PPUri = <<"\"\" <sip:0000000000@192.168.1.1>;rport;tag=3et3X2avH64Xr">>,
 
-    Params = #sip_uri_params{
-      other = [{<<"rport">>, true}, {<<"tag">>, <<"3et3X2avH64Xr">>}]
-     },
+    Params = [{<<"rport">>, true}
+              ,{<<"tag">>, <<"3et3X2avH64Xr">>}
+             ],
 
     URI = #sip_uri{
       display_name = <<"\"\"">>
@@ -224,11 +211,10 @@ pp_sip_uri_test() ->
 
 pp_sip_uri_with_headers_test() ->
     PPUri = <<"sips:alice:pass@atlanta.com;maddr=239.255.255.1;ttl=15;method=INVITE?day=tuesday">>,
-    Params = #sip_uri_params{
-      method = 'INVITE'
-      ,maddr = <<"239.255.255.1">>
-      ,ttl = 15
-     },
+    Params = [{<<"maddr">>, <<"239.255.255.1">>}
+              ,{<<"ttl">>, 15}
+              ,{<<"method">>, 'INVITE'}
+             ],
 
     URI = #sip_uri{
       display_name = 'undefined'

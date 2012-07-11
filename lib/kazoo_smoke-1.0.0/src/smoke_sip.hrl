@@ -8,17 +8,7 @@
           ,transport = 'udp' :: sip_transport()
           ,host :: ne_binary()
           ,port :: inet:port_number()
-          ,params :: sip_uri_params()
-         }).
-
--record(sip_uri_params, {
-          transport = 'undefined' :: sip_transport() | 'undefined'
-          ,maddr = 'undefined' :: ne_binary() | 'undefined' % overrides address derived from Host field
-          ,ttl = 'undefined' :: non_neg_integer() | 'undefined'
-          ,user = 'undefined' :: ne_binary() | 'undefined'
-          ,method = 'undefined' :: 'undefined' | sip_method()
-          ,lr = 'undefined' :: 'undefined' | ne_binary()
-          ,other = [] :: [{ne_binary(), ne_binary()},...] | []
+          ,params :: wh_proplist()
          }).
 
 -record(sip_uri, {
@@ -28,7 +18,7 @@
          ,password :: binary()
          ,host = <<"nohost">> :: ne_binary()
          ,port :: integer()
-         ,params :: sip_uri_params() 
+         ,params :: wh_proplist()
          ,headers = [] :: wh_proplist()
          }).
 
@@ -64,7 +54,6 @@
 -opaque sip_via() :: #sip_via{}.
 -opaque sip_req() :: #sip_req{}.
 -opaque sip_uri() :: #sip_uri{}.
--opaque sip_uri_params() :: #sip_uri_params{}.
 
 -type sip_method() ::
         'INVITE'    | %[RFC3261]
