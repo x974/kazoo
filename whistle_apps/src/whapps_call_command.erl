@@ -804,7 +804,6 @@ record_call(MediaName, Action, StreamTo, TimeLimit, Terminators, Call) ->
                                  wait_for_headless_application_return().
 -spec b_record_call/6 :: (ne_binary(), ne_binary(), whapps_api_binary(), whapps_api_binary() | integer(), [ne_binary(),...] | [], whapps_call:call()) ->
                                  wait_for_headless_application_return().
-
 b_record_call(MediaName, Call) ->
     record_call(MediaName, Call),
     wait_for_headless_application(<<"record">>, <<"RECORD_STOP">>, <<"call_event">>, infinity).
