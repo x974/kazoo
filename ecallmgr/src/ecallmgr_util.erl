@@ -92,6 +92,14 @@ send_cmd(Node, _UUID, "broadcast", Args) ->
     Resp = freeswitch:api(Node, uuid_broadcast, wh_util:to_list(iolist_to_binary(Args))),
     lager:debug("broadcast resulted in: ~p", [Resp]),
     Resp;
+send_cmd(Node, UUID, "park", _Args) ->
+    lager:debug("execute on node ~s: park => uuid_transfer(~s -both park inline)", [Node, UUID]),
+    _ = ecallmgr_util:fs_log(Node, "whistle executing park => uuid_transfer ~s -both park inline", [UUID]),
+    freeswitch:api(Node, uuid_transfer, wh_util:to_list(<<UUID/binary, " -both park inline">>));
+send_cmd(Node, UUID, "call_pickup", Args) ->
+    lager:debug("execute on node ~s: uuid_bridge(~s)", [Node, Args]),
+    _ = ecallmgr_util:fs_log(Node, "whistle executing uuid_bridge ~s", [Args]),
+    freeswitch:api(Node, uuid_bridge, wh_util:to_list(Args));
 send_cmd(Node, UUID, "hangup", _) ->
     lager:debug("terminate call on node ~s", [Node]),
     _ = ecallmgr_util:fs_log(Node, "whistle terminating call", []),
