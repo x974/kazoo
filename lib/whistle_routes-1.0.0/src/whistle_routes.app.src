@@ -1,0 +1,12 @@
+{application, whistle_routes,
+ [
+  {description, "Whistle routes ties the Whistle core to SBCs"},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { whistle_routes_app, []}},
+  {env, []}
+ ]}.

@@ -1,0 +1,9 @@
+{
+    "_id":"_design/routes"
+    ,"language":"javascript"
+    ,"views": {
+        "servers": {
+            "map":"function(doc) { if (!doc.routes || !doc.routes.servers || doc.pvt_deleted || !(doc.pvt_number_state in {'in_service':'', 'reserved':'', 'port_in':'' })) return;  emit(doc._id, doc.routes.servers); }"
+        }
+    }
+}
