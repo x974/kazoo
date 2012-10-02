@@ -7,10 +7,6 @@
 %%%-------------------------------------------------------------------
 -module(wh_route_util).
 
--include_lib("whistle/include/wh_databases.hrl").
-
--export([update_memcache/2]).
-
 -export([itsp_ips/0]).
 -export([kazoo_ips/0]).
 -export([available_kazoo_routes/0]).
@@ -19,34 +15,28 @@
 -export([discover_fs_nodes/0]).
 -export([discover_itsp_ips/0]).
 
-update_memcache(Key, Value) ->
-    Caches = [PID 
-              || {_, PID} <- wh_route_cache_sup:caches()
-             ],
-    update_memcache(Key, Value, Caches).
+-include_lib("whistle_routes/src/wh_routes.hrl").
 
-update_memcache(Key, Value, Caches) ->
-    _ = [wh_route_cache:set(Cache, Key, Value)
-         || Cache <- Caches
-        ],
-    ok.
-
+-spec itsp_ips/0 :: () -> proplist().
 itsp_ips() ->
     [{IP, <<"itsp">>} 
      || IP <- discover_itsp_ips()
     ].
 
+-spec kazoo_ips/0 :: () -> proplist().
 kazoo_ips() ->    
     [{IP, <<"kazoo">>} 
      || IP <- discover_fs_nodes()
     ].
 
+-spec available_kazoo_routes/0 :: () -> proplist().
 available_kazoo_routes() ->
     Available = wh_util:join_binary([<<"sip:", IP/binary>> 
                                          || IP <- discover_fs_nodes()
                                     ], <<";">>),
     [{<<"available_kazoo_routes">>, Available}].    
 
+-spec numbers_routes/0 :: () -> proplist().
 numbers_routes() ->
     [begin
          Dst = wh_util:join_binary([<<"sip:", Server/binary>> 
@@ -57,6 +47,7 @@ numbers_routes() ->
      || {Number, Servers} <- wnm_routes:get_number_servers()
     ].
 
+-spec discover_fs_nodes/0 :: () -> proplist().
 discover_fs_nodes() ->
     case couch_mgr:open_doc(?WH_CONFIG_DB, <<"ecallmgr">>) of
         {error, _R} ->
@@ -66,6 +57,7 @@ discover_fs_nodes() ->
             extract_ecallmgr_fs_nodes(JObj)
     end.
 
+-spec extract_ecallmgr_fs_nodes/1 :: (wh_json:json_object()) -> proplist().
 extract_ecallmgr_fs_nodes(JObj) ->
     lists:foldr(fun(K, I) ->
                         case wh_json:get_value([K, <<"advertised_ips">>], JObj, []) of
@@ -76,18 +68,21 @@ extract_ecallmgr_fs_nodes(JObj) ->
                         end     
                 end, [], wh_json:get_keys(JObj)).
 
+-spec resolve_fs_nodes/2 :: (ne_binary(), proplist()) -> proplist().
 resolve_fs_nodes(Nodes, IPs) ->
     lists:foldr(fun(Node, I) -> 
                         [_, Domain] = binary:split(Node, <<"@">>),
                         resolve_ip(Domain, I)
                 end, IPs, Nodes).
 
+-spec discover_itsp_ips/0 :: () -> proplist().
 discover_itsp_ips() ->
     Routines = [fun ecallmgr_trusted_ips/1
                 ,fun offnet_resource_gateways/1
                ],
     lists:foldr(fun(F, I) -> F(I) end, [], Routines).
 
+-spec offnet_resource_gateways/1 :: (proplist()) -> proplist().
 offnet_resource_gateways(IPs) ->
     ViewOptions = [{include_docs, true}],
     case couch_mgr:get_results(<<"offnet">>, <<"resources/listing_active_by_weight">>, ViewOptions) of
@@ -101,6 +96,7 @@ offnet_resource_gateways(IPs) ->
                         end, IPs, JObjs)
     end.
 
+-spec resource_gateway_ips/2 :: (wh_json:json_object(), proplist()) -> proplist().
 resource_gateway_ips(JObj, IPs) ->
     lists:foldr(fun(Gateway, I) ->
                         case wh_json:is_true(<<"enabled">>, Gateway) of
@@ -111,6 +107,7 @@ resource_gateway_ips(JObj, IPs) ->
                         end
                 end, IPs, wh_json:get_value(<<"gateways">>, JObj, [])).
 
+-spec ecallmgr_trusted_ips/1 :: (proplist()) -> proplist().
 ecallmgr_trusted_ips(IPs) ->
     case couch_mgr:open_doc(?WH_CONFIG_DB, <<"ecallmgr">>) of
         {error, _R} ->
@@ -120,6 +117,7 @@ ecallmgr_trusted_ips(IPs) ->
             extract_ecallmgr_trusted_ips(JObj, IPs)
     end.
 
+-spec extract_ecallmgr_trusted_ips/2 :: (wh_json:json_object(), proplist()) -> proplist().
 extract_ecallmgr_trusted_ips(JObj, IPs) ->
     lists:foldr(fun(K, I) ->
                         case wh_json:get_value([K, <<"acls">>], JObj) of
@@ -128,7 +126,7 @@ extract_ecallmgr_trusted_ips(JObj, IPs) ->
                         end
                 end, IPs, wh_json:get_keys(JObj)).
                                      
-
+-spec extract_acls_trusted_ips/2 :: (wh_json:json_object(), proplist()) -> proplist().
 extract_acls_trusted_ips(ACLs, IPs) ->        
     lists:foldr(fun(K, I) ->
                         case wh_json:get_value([K, <<"network-list-name">>], ACLs) =:= <<"trusted">>
@@ -141,6 +139,7 @@ extract_acls_trusted_ips(ACLs, IPs) ->
                         end
                 end, IPs, wh_json:get_keys(ACLs)).
 
+-spec expand_cidr_notation/1 :: (ne_binary()) -> ne_binary().
 expand_cidr_notation(CIDR) ->
     %% TODO: this currently supports /32 only....
     case binary:split(CIDR, <<"/">>) of
@@ -148,6 +147,7 @@ expand_cidr_notation(CIDR) ->
         _ -> CIDR
     end.
 
+-spec resolve_ip/2 :: (ne_binary(), proplist()) -> proplist().
 resolve_ip(Domain, IPs) ->
     Lookup = <<"_sip._udp.", Domain/binary>>,
     case inet_res:lookup(wh_util:to_list(Lookup), in, srv) of
@@ -156,6 +156,7 @@ resolve_ip(Domain, IPs) ->
             resolve_a_records([D || {_, _, _, D} <- SRVs], IPs)
     end.
 
+-spec resolve_a_records/2 :: (ne_binary(), proplist()) -> proplist().
 resolve_a_records(Domains, IPs) ->
     lists:foldr(fun(Domain, I) ->
                         case wh_util:is_ipv4(Domain) of
@@ -166,6 +167,7 @@ resolve_a_records(Domains, IPs) ->
                         end
                 end, IPs, Domains).
 
+-spec resolve_a_record/2 :: (ne_binary(), proplist()) -> proplist().
 resolve_a_record(Domain, IPs) ->
     lists:foldr(fun(IPTuple, I) ->
                         [iptuple_to_binary(IPTuple)|I]

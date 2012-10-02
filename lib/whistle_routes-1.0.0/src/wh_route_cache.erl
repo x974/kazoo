@@ -34,6 +34,8 @@
                 ,initialized = false
                }).
 
+-include_lib("whistle_routes/src/wh_routes.hrl").
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -45,6 +47,7 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
+-spec start_link/2 :: (text(), text()) -> startlink_ret().
 start_link(Host, Port) when not is_list(Host) ->
     start_link(wh_util:to_list(Host), Port);
 start_link(Host, Port) when not is_integer(Port) ->
@@ -52,33 +55,43 @@ start_link(Host, Port) when not is_integer(Port) ->
 start_link(Host, Port) ->
     gen_server:start_link(?MODULE, [Host, Port], []).
 
+-spec status/1 :: (pid()) -> proplist() | {'error', _}.
 status(Srv) ->
     gen_server:call(Srv, {status}).
 
+-spec reconnect/1 :: (pid()) -> 'ok'.
 reconnect(Srv) ->
     gen_server:cast(Srv, {reconnect}).
 
+-spec initialize_cache/1 :: (pid()) -> 'ok'.
 initialize_cache(Srv) ->
     ok = sync_itsp_ips(Srv),
     ok = sync_kazoo_ips(Srv),
     ok = sync_available_routes(Srv),
     ok = sync_numbers(Srv).
 
+-spec sync_itsp_ips/1 :: (pid()) -> 'ok'.
 sync_itsp_ips(Srv) ->
     Updates = wh_route_util:itsp_ips(),
     gen_server:cast(Srv, {multiset, Updates}).
 
+-spec sync_kazoo_ips/1 :: (pid()) -> 'ok'.
 sync_kazoo_ips(Srv) ->
     Updates = wh_route_util:kazoo_ips(),
     gen_server:cast(Srv, {multiset, Updates}).
 
+-spec sync_available_routes/1 :: (pid()) -> 'ok'.
 sync_available_routes(Srv) ->
     Updates = wh_route_util:available_kazoo_routes(),
     gen_server:cast(Srv, {multiset, Updates}).
 
+-spec sync_numbers/1 :: (pid()) -> 'ok'.
 sync_numbers(Srv) ->
     Updates = wh_route_util:numbers_routes(),
     gen_server:cast(Srv, {multiset, Updates}).
+
+-spec set/3 :: (pid(), text(), binary()) -> 'ok'.
+-spec set/5 :: (pid(), text(), integer(), integer(), binary()) -> 'ok'.
 
 set(Srv, Key, Bytes) ->
     set(Srv, Key, 1, 0, Bytes).
@@ -239,6 +252,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+-spec try_memcached_fun/2 :: (atom(), list()) -> boolean().
 try_memcached_fun(Function, Args) ->
     try apply(memcached, Function, Args) of
         __ -> true

@@ -16,7 +16,7 @@
 
 %% Helper macro for declaring children of supervisor
 -define(CHILD(Name, Type), fun(N, T) -> {N, {N, start_link, []}, permanent, 5000, T, [N]} end(Name, Type)).
--define(CHILDREN, []).
+-define(CHILDREN, [{wh_route_cache_sup, supervisor}, {wh_routes, worker}]).
 
 %% ===================================================================
 %% API functions
