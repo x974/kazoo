@@ -1,0 +1,53 @@
+* Overview
+
+The knapsack application helps users / account managers store their files in locations outside of Kazoo's storage facilities. This allows users to have their voicemails, faxes, etc, automatically saved to their DropBox, Box.net, or any other 3rd party storage service. This includes a "generic storage server", which will essentially be a web server capable of accepting an HTTP POST with the multipart data in the body. This should allow accounts to save their data (especially CDRs that they like to process on their own) to their own server for later processing/handling.
+
+** What to store
+
+Voicemails
+Faxes
+Call Recordings
+SMS
+MMS
+CDRs
+
+** How to configure objects for storage
+
+Take, for instance, a user doc:
+
+{ "_id":"user_doc_id"
+ ,"pvt_offsite_storage":{
+    "box.net":{
+      "api_key":"abcd"
+     ,"auth_token":"1234"
+     ,"storage_types":["voicemail", "fax"]
+    }
+   ,"generic":{
+      "url":"http://some.client.server:12345/save/to/here"
+     ,"storage_types":["cdr"]
+   }
+ }
+}
+
+The pvt_offsite_storage field tells us that this object (a user, in this case), would like to store "voicemail" and "fax" documents to a box.net account they've configured via the UI (TBD).
+
+When voicemail saves and fax saves occur, the knapsack app is notified of the event. If the event document contains an owner_id field, the owner document will be called up to see if it has the pvt_offsite_storage flag. If so, it will loop through each provider in the object and check the pvt_type of the event doc against the storage_types list. Should a match occur, the knapsack app will attempt to save the event doc (and associated binary data, if applicable) to the storage facility. (Note: if no storage_types key is found, *all* types are stored; if storage_types is an empty list([]), no types will be stored).
+
+After the owner's storage has been processed, pull down the account doc and check it for the pvt_offsite_storage object. This will occur whether the event doc has an owner_id or not. The account doc will have an additional flag, "pvt_offsite_storage_of_unowned_only", set to a boolean. If true and the owner_id is undefined or non-existant (or the doc has been deleted), store to the account's settings. If false, store regardless of the owner_id. This flag should default to true so that only unowned data is stored at the account level.
+
+*** Account Doc
+
+{ "_id":"account_id"
+ ,"pvt_offsite_storage_of_unowned_only":true
+ ,"pvt_offsite_storage":{
+    "boxdotnet":{
+      "api_key":"abcd"
+     ,"auth_token":"1234"
+     ,"storage_types":["voicemail", "fax"]
+    }
+   ,"generic":{
+      "url":"http://some.client.server:12345/save/to/here"
+     ,"storage_types":["cdr"]
+    }
+  }
+}

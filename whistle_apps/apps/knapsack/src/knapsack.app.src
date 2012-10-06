@@ -1,0 +1,12 @@
+{application, knapsack,
+ [
+  {description, "Knapsack - 3rd Party storage component"},
+  {vsn, "0.0.1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { skel_app, []}},
+  {env, []}
+ ]}.
