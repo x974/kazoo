@@ -152,7 +152,7 @@ handle_event(_JObj, _State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-    lager:debug("vm notify process ~p termination", [_Reason]).
+    lager:debug("notify listener terminating: ~p", [_Reason]).
 
 %%--------------------------------------------------------------------
 %% @private
