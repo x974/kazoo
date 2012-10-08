@@ -8,11 +8,11 @@
 %%%-------------------------------------------------------------------
 -module(knap_boxdotnet).
 
--define(BASE_URL, <<"https://api.box.com/2.0">>).
+-define(BASE_URL, <<"https://www.box.com/api/2.0">>).
 
 save(Settings, AcctDb, SaveDoc, Type) ->
     Tests = [fun() -> should_save_type(Settings, Type) end
-             ,fun() -> test_auth_token(Settings) end
+             %,fun() -> test_auth_token(Settings) end
             ],
 
     case lists:all(fun(F) -> F() end, Tests) of
@@ -21,7 +21,117 @@ save(Settings, AcctDb, SaveDoc, Type) ->
     end.
 
 save_doc(Settings, AcctDb, SaveDoc, Type) ->
-    ok.
+    {ok, TokenJObj} = create_token(Settings),
+    AuthToken = wh_json:get_value(<<"token">>, TokenJObj),
+    Authz = authz_header(ApiKey, AuthToken),
+
+    RootFolderId = wh_json:get_value([<<"item">>, <<"id">>], TokenJObj),
+
+    {ok, DestFolder} = get_destination_folder(wh_json:get_value(<<"api_key">>, Settings)
+                                              ,AuthToken
+                                              ,RootFolderId
+                                              ,Type
+                                              ,Authz
+                                             ),
+
+    {ok, Binary} = knapsack_util:get_file_to_save(AcctDb, SaveDoc, Type),
+    upload_file(DestFolder, Binary, Authz).
+
+upload_file(DestFolder, Binary, Authz) ->
+%% https://api.box.com/2.0/files/data \
+%% -H "Authorization: BoxAuth api_key=API_KEY&auth_token=AUTH_TOKEN" \
+%% -F filename1=@FILE_NAME1 \
+%% -F filename2=@FILE_NAME2 \
+%% -F folder_id=FOLDER_ID
+    Url = filename:join([whapps_config:get(?MODULE, <<"base_url">>, ?BASE_URL)
+                         ,<<"files">>
+                         ,<<"data">>
+                        ]),
+    Boundary = wh_util:rand_hex_binary(4),
+    ReqHeaders = [{<<"Authorization">>, Authz}
+                  ,{<<"Content-Type">>, <<"multipart/form-data, boundary=", Boundary/binary>>}
+                  ,{<<"Content-Length">>, byte_size(
+                 ]
+
+Content-type: multipart/form-data, boundary=AaB03x
+
+    case ibrowse:send_req(Url, , 'post', ReqBody) of
+
+-spec get_destination_folder/4 :: (ne_binary(), ne_binary(), ne_binary(), ne_binary(), ne_binary()) ->
+                                          {'ok', wh_json:json_object()} |
+                                          {'error', integer()}.
+get_destination_folder(ApiKey, AuthToken, RootFolderId, Type, Authz) ->
+    Url = filename:join([whapps_config:get(?MODULE, <<"base_url">>, ?BASE_URL)
+                         ,<<"folders">>
+                         ,RootFolderId
+                        ]),
+
+    case ibrowse:send_req(Url, [{<<"Authorization">>, Authz}], 'get') of
+        {ok, "200", _RespHeaders, RespBody} ->
+            lager:debug("root folder properties: ~s", [RespBody]),
+            RootFolder = wh_json:decode(RespBody),
+            get_destination_folder(RootFolder, Type, Authz);
+        {ok, ErrCode, _RespHeaders, _RespBody} ->
+            lager:debug("failed to get root folder: ~s: ~s", [ErrCode, _RespBody]),
+            {error, wh_util:to_integer(ErrCode)}
+    end.
+
+-spec get_destination_folder/3 :: (wh_json:json_object(), ne_binary(), ne_binary()) ->
+                                          {'ok', wh_json:json_object()} |
+                                          {'error', integer()}.
+get_destination_folder(RootFolder, Type, Authz) ->
+    Entries = wh_json:get_value([<<"item_collection">>, <<"entries">>], RootFolder, []),
+    case [ FolderMeta || FolderMeta <- Entries,
+                       wh_json:get_value(<<"type">>, FolderMeta) =:= <<"folder">>,
+                       wh_json:get_value(<<"name">>, FolderMeta) =:= Type
+         ] of
+        [FolderMeta|_] -> {ok, FolderMeta};
+        [] -> create_destination_folder(RootFolder, Type, Authz)
+    end.
+
+-spec create_destination_folder/3 :: (wh_json:json_object(), ne_binary(), ne_binary()) ->
+                                             {'ok', wh_json:json_object()} |
+                                             {'error', integer()}.
+create_destination_folder(RootFolder, Type, Authz) ->
+    RootFolderId = wh_json:get_value(<<"id">>, RootFolder),
+
+    Url = filename:join([whapps_config:get(?MODULE, <<"base_url">>, ?BASE_URL)
+                         ,<<"folders">>
+                         ,RootFolderId
+                        ]),
+
+    ReqBody = wh_json:encode(
+                wh_json:from_list([{<<"name">>, Type}])
+               ),
+
+    case ibrowse:send_req(Url, [{<<"Authorization">>, Authz}], 'post', ReqBody) of
+        {ok, "201", _RespHeaders, RespBody} ->
+            lager:debug("created folder ~s: ~s", [Type, RespBody]),
+            {ok, wh_json:decode(RespBody)};
+        {ok, ErrCode, _RespHeaders, _RespBody} ->
+            lager:debug("failed to create folder ~s: ~s:~s", [Type, ErrCode, _RespBody]),
+            {error, wh_util:to_integer(ErrCode)}
+    end.
+
+create_token(Settings) ->
+    ReqBody = wh_json:encode(
+                wh_json:from_list([{<<"email">>, wh_json:get_value(<<"email">>, Settings)}])
+               ),
+
+    Url = filename:join([whapps_config:get(?MODULE, <<"base_url">>, ?BASE_URL)
+                         ,<<"tokens">>
+                        ]),
+
+    Authorization = authz_header(wh_json:get_value(<<"api_key">>, Settings)),
+
+    case ibrowse:send_req(Url, [{"Authorization", Authorization}], 'get', ReqBody) of
+        {ok, "201", _RespHeaders, RespBody} ->
+            lager:debug("created token response: ~s", [RespBody]),
+            {ok, wh_json:decode(RespBody)};
+        {ok, ErrorCode, _RespHeaders, _RespBody} ->
+            lager:debug("failed to create token response: ~s: ~s", [ErrorCode, _RespBody]),
+            {error, wh_util:to_integer(ErrorCode)}
+    end.
 
 should_save_type(Settings, Type) ->
     case wh_json:get_value(<<"storage_types">>, Settings) of
@@ -30,42 +140,7 @@ should_save_type(Settings, Type) ->
         L -> lists:member(Type, L)
     end.
 
-test_auth_token(Settings) ->
-    BaseUrl = whapps_config:get(?MODULE, <<"base_url">>, ?BASE_URL),
-
-    ApiKey = wh_json:get_value(<<"api_key">>, Settings),
-    AuthToken = wh_json:get_value(<<"auth_token">>, Settings),
-
-    test_auth_token(BaseUrl, ApiKey, AuthToken).
-
-test_auth_token(Url, ApiKey, AuthToken) ->
-    Authorization = list_to_binary([<<"BoxAuth api_key=">>, ApiKey, <<"&auth_token=">>, AuthToken]),
-    case ibrowse:send_req(Url, [{"Authorization", Authorization}], 'get') of
-        {ok, "200", _RespHeaders, RespBody} ->
-            true;
-        {ok, _Status, _RespHeaders, RespBody} ->
-            false;
-        {error, Reason} ->
-            false
-    end.
-
-open_folder(Settings) ->
-    BaseUrl = whapps_config:get(?MODULE, <<"base_url">>, ?BASE_URL),
-
-    ApiKey = wh_json:get_value(<<"api_key">>, Settings),
-    AuthToken = wh_json:get_value(<<"auth_token">>, Settings),
-
-    KazooFolder = whapps_config:get(?MODULE, <<"folder_name">>, <<"saved_kazoos">>),
-    Url = filename:join([BaseUrl, <<"folders">>, KazooFolder]),
-
-    open_folder(Url, ApiKey, AuthToken).
-open_folder(Url, ApiKey, AuthToken) ->
-    Authorization = list_to_binary([<<"BoxAuth api_key=">>, ApiKey, <<"&auth_token=">>, AuthToken]),
-    case ibrowse:send_req(Url, [{"Authorization", Authorization}], 'get') of
-        {error, _E}=E -> E;
-        {ok, "200", _RespHeaders, RespBody} ->
-            {ok, wh_json:decode(RespBody)};
-        {ok, _Status, _RespHeaders, RespBody} ->
-            lager:debug("non successful fetch of folder: ~s: ~s", [_Status, RespBody]),
-            {error, wh_json:decode(RespBody)}
-    end.
+authz_header(ApiKey) ->
+    list_to_binary([<<"BoxAuth api_key=">>, ApiKey]).
+authz_header(ApiKey, AuthToken) ->
+    list_to_binary([<<"BoxAuth api_key=">>, ApiKey, <<"&auth_token=">>, AuthToken]).
