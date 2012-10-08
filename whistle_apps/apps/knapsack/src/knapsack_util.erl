@@ -10,7 +10,16 @@
 
 -export([maybe_save_to_owner/3, maybe_save_to_owner/4
          ,save_to_account/3, save_to_account/4
+         ,should_save_type/2
         ]).
+
+%% Is this type of file configured to be saved in this provider?
+should_save_type(Settings, Type) ->
+    case wh_json:get_value(<<"storage_types">>, Settings) of
+        undefined -> true;
+        [] -> false;
+        L -> lists:member(Type, L)
+    end.
 
 %% If we get an owner ID and we successfully open the owner's document, continue
 %% Arity 3 will pull the type off the ToSaveId doc; arity 4 sets the type (which
