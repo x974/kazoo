@@ -10,7 +10,7 @@
 
 -export([save/4]).
 
--include("knapsack.hrl").
+-include("../knapsack.hrl").
 
 -define(BASE_URL, <<"https://www.box.com/api/2.0">>).
 
@@ -53,14 +53,15 @@ upload_file(DestFolder, Binary, Authz) ->
     Boundary = wh_util:rand_hex_binary(4),
     {Meta, Binary} = knapsack_util:fetch_file_to_store(AcctDb, SaveDoc, Type),
 
-    ReqBody = [Meta, Boundary
+    %% wrong, need content disposition
+    ReqBody = [Meta, Boundary, Binary, Boundry],
 
     ReqHeaders = [{<<"Authorization">>, Authz}
                   ,{<<"Content-Type">>, <<"multipart/form-data, boundary=", Boundary/binary>>}
                   ,{<<"Content-Length">>, byte_size(ReqBody)}
-                 ]
+                 ],
 
-    case ibrowse:send_req(Url, , 'post', ReqBody) of
+    case ibrowse:send_req(Url, ReqHeaders, 'post', ReqBody) of
         _ -> ok
     end.
 

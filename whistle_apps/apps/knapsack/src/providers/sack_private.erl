@@ -10,7 +10,7 @@
 
 -export([save/4]).
 
--include("knapsack.hrl").
+-include("../knapsack.hrl").
 
 save(Settings, AcctDb, SaveDoc, Type) ->
     Tests = [fun() -> knapsack_util:should_save_type(Settings, Type) end
