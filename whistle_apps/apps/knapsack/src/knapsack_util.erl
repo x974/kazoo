@@ -11,7 +11,18 @@
 -export([maybe_save_to_owner/3, maybe_save_to_owner/4
          ,save_to_account/3, save_to_account/4
          ,should_save_type/2
+         ,fetch_file_to_save/3
         ]).
+
+-spec fetch_file_to_save/3 :: (ne_binary(), wh_json:json_object(), ne_binary()) ->
+                                      {wh_json:json_object(), ne_binary()}.
+fetch_file_to_save(AcctDb, FileJObj, _Type) ->
+    {[[Meta|_], [AttachmentId|_]]} = wh_json:get_values(wh_json:get_value([<<"_attachments">>], FileJObj)),
+    {ok, Bin} = couch_mgr:fetch_attachment(AcctDb
+                                           ,wh_json:get_value(<<"_id">>, FileJObj)
+                                           ,AttachmentId
+                                          ),
+    {Meta, Bin}.
 
 %% Is this type of file configured to be saved in this provider?
 should_save_type(Settings, Type) ->
