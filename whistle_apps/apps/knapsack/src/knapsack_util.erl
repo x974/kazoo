@@ -75,7 +75,7 @@ save_to_owner(AcctDb, OwnerJObj, ToSaveId, Type) ->
     end.
 
 save(Provider, Settings, AcctDb, ToSaveId) ->
-    case wh_util:try_load_module(<<"knap_", Provider/binary>>) of
+    case wh_util:try_load_module(<<"sack_", Provider/binary>>) of
         false -> lager:debug("no such provider: ~s", [Provider]), false;
         Module ->
             {Doc, Type} = load_to_save_doc(AcctDb, ToSaveId),
