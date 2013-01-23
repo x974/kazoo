@@ -1,6 +1,7 @@
 ROOT = .
 DIALYZER = dialyzer
 REBAR = $(ROOT)/bin/rebar
+ERL_LIBS := $(ROOT)/lib:$(ROOT)/whistle_apps/lib
 
 MAKEDIRS = lib/rabbitmq_server-2.8.6/Makefile \
 	   lib/rabbitmq_client-2.8.6/Makefile \

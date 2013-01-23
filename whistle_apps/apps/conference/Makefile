@@ -1,6 +1,7 @@
 ROOT = ../../..
 DIALYZER = dialyzer
 REBAR = $(ROOT)/bin/rebar
+ERL_LIBS := $(ROOT)/lib:$(ROOT)/whistle_apps/lib
 
 DIRS = . \
         $(ROOT)/lib/whistle-1.0.0 \
