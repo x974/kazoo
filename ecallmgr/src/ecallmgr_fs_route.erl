@@ -177,6 +177,7 @@ process_route_req(Node, FSID, CallId, Props) ->
     end.
 
 search_for_route(Node, FSID, CallId, Props) ->
+    Start = erlang:now(),
     ReqResp = wh_amqp_worker:call(?ECALLMGR_AMQP_POOL
                                   ,route_req(CallId, FSID, Props, Node)
                                   ,fun wapi_route:publish_req/1
@@ -187,6 +188,8 @@ search_for_route(Node, FSID, CallId, Props) ->
             lager:debug("did not receive route response: ~p", [_R]);
         {ok, RespJObj} ->
             true = wapi_route:resp_v(RespJObj),
+            lager:debug("route response received with msg-id ~s: ~pms", [wh_json:get_value(<<"Msg-ID">>, RespJObj), wh_util:elapsed_ms(Start)]),
+
             AuthzEnabled = wh_util:is_true(ecallmgr_config:get(<<"authz_enabled">>, false)),
             case AuthzEnabled andalso wh_cache:wait_for_key_local(?ECALLMGR_UTIL_CACHE, ?AUTHZ_RESPONSE_KEY(CallId)) of
                 {ok, false} ->
@@ -199,11 +202,12 @@ search_for_route(Node, FSID, CallId, Props) ->
 %% Reply with a 402 for unauthzed calls
 -spec reply_forbidden/2 :: (atom(), ne_binary()) -> 'ok'.
 reply_forbidden(Node, FSID) ->
+    lager:debug("route request is forbidden from routing"),
     {ok, XML} = ecallmgr_fs_xml:route_resp_xml([{<<"Method">>, <<"error">>}
                                                 ,{<<"Route-Error-Code">>, <<"402">>}
                                                 ,{<<"Route-Error-Message">>, <<"Payment Required">>}
                                                ]),
-    lager:debug("sending XML to ~s: ~s", [Node, XML]),
+    lager:debug("sending forbidding XML to ~s: ~s", [Node, XML]),
     case freeswitch:fetch_reply(Node, FSID, iolist_to_binary(XML)) of
         ok -> lager:debug("node ~s accepted our route unauthz", [Node]);
         {error, Reason} -> lager:debug("node ~s rejected our route unauthz, ~p", [Node, Reason]);
@@ -212,9 +216,10 @@ reply_forbidden(Node, FSID) ->
 
 -spec reply_affirmative/5 :: (atom(), ne_binary(), ne_binary(), wh_json:object(), wh_proplist()) -> 'ok'.
 reply_affirmative(Node, FSID, CallId, RespJObj, Props) ->
+    lager:debug("route request was approved for routing"),
     {ok, XML} = ecallmgr_fs_xml:route_resp_xml(RespJObj),
     ServerQ = wh_json:get_value(<<"Server-ID">>, RespJObj),
-    lager:debug("sending XML to ~s: ~s", [Node, XML]),
+    lager:debug("sending affirmative XML to ~s: ~s", [Node, XML]),
     case freeswitch:fetch_reply(Node, FSID, iolist_to_binary(XML)) of
         ok ->
             lager:debug("node ~s accepted our route (authzed), starting control and events", [Node]),
