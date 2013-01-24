@@ -23,17 +23,17 @@
 -type menu_keys() :: #menu_keys{}.
 
 -record(cf_menu_data, {
-          menu_id = 'undefined' :: ne_binary() | 'undefined'
+          menu_id :: api_binary()
          ,name = <<>>
          ,retries = 3 :: pos_integer()
          ,timeout = <<"2000">> :: ne_binary()
          ,max_length = <<"4">> :: ne_binary()
-         ,hunt = false :: boolean()
+         ,hunt = 'false' :: boolean()
          ,hunt_deny = <<>> :: binary()
          ,hunt_allow = <<>> :: binary()
          ,record_pin = <<>> :: binary()
-         ,record_from_offnet = 'false' :: boolean()   
-         ,greeting_id = 'undefined' :: 'undefined' | ne_binary()
+         ,record_from_offnet = 'false' :: boolean()
+         ,greeting_id :: api_binary()
          ,exit_media = 'true' :: boolean() | ne_binary()
          ,transfer_media = 'true' :: boolean() | ne_binary()
          ,invalid_media = 'true' :: boolean() | ne_binary()
@@ -47,7 +47,7 @@
 %% Entry point for this module
 %% @end
 %%--------------------------------------------------------------------
--spec handle/2 :: (wh_json:json_object(), whapps_call:call()) -> 'ok'.
+-spec handle/2 :: (wh_json:object(), whapps_call:call()) -> 'ok'.
 handle(Data, Call) ->
     Menu = get_menu_profile(Data, Call),
     whapps_call_command:answer(Call),
@@ -94,26 +94,26 @@ menu_loop(#cf_menu_data{retries=Retries, max_length=MaxLength, timeout=Timeout
             %% expected behaviour as CFPid has moved on from this invocation
             AllowRecord = RecOffnet orelse whapps_call:inception(Call) =:= <<"on-net">>,
             case try_match_digits(Digits, Menu, Call) of
-                true -> 
+                true ->
                     ok;
-                false when Digits =:= RecordPin, AllowRecord -> 
+                false when Digits =:= RecordPin, AllowRecord ->
                     lager:info("selection matches recording pin"),
                     case record_greeting(tmp_file(), Menu, Call) of
                         {ok, M} ->
                             lager:info("returning caller to menu"),
                             _ = whapps_call_command:b_prompt(<<"menu-return">>, Call),
                             menu_loop(M, Call);
-                        {error, _} -> 
+                        {error, _} ->
                             cf_exe:stop(Call)
-                    end;                            
+                    end;
                 false ->
-                    lager:info("invalid selection ~w", [Digits]),
+                    lager:info("invalid selection ~s", [Digits]),
                     _ = play_invalid_prompt(Menu, Call),
                     menu_loop(Menu#cf_menu_data{retries=Retries - 1}, Call)
             end;
         {error, _} ->
             lager:info("caller hungup while in the menu"),
-            cf_exe:stop(Call)  
+            cf_exe:stop(Call)
     end.
 
 %%--------------------------------------------------------------------
@@ -227,9 +227,10 @@ hunt_for_callflow(Digits, Menu, Call) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec record_greeting/3 :: (binary(), menu(), whapps_call:call()) -> {'ok', menu()} |
-                                                                     {'error', wh_json:json_object()}.
-record_greeting(AttachmentName, #cf_menu_data{greeting_id=undefined}=Menu, Call) ->
+-spec record_greeting/3 :: (binary(), menu(), whapps_call:call()) ->
+                                   {'ok', menu()} |
+                                   {'error', wh_json:object()}.
+record_greeting(AttachmentName, #cf_menu_data{greeting_id='undefined'}=Menu, Call) ->
     MediaId = recording_media_doc(<<"greeting">>, Menu, Call),
     record_greeting(AttachmentName, Menu#cf_menu_data{greeting_id=MediaId}, Call);
 record_greeting(AttachmentName, #cf_menu_data{greeting_id=MediaId}=Menu, Call) ->
@@ -244,7 +245,7 @@ record_greeting(AttachmentName, #cf_menu_data{greeting_id=MediaId}=Menu, Call) -
     case whapps_call_command:b_record(AttachmentName, Call) of
         {error, _}=E -> E;
         {ok, JObj} ->
-            NoRec = whapps_config:get_integer(?MOD_CONFIG_CAT, <<"min_greeting_length">>, 1500) 
+            NoRec = whapps_config:get_integer(?MOD_CONFIG_CAT, <<"min_greeting_length">>, 1500)
                 > wh_json:get_integer_value(<<"Length">>, JObj),
             case review_recording(AttachmentName, Menu, Call) of
                 {ok, record} ->
@@ -271,7 +272,7 @@ record_greeting(AttachmentName, #cf_menu_data{greeting_id=MediaId}=Menu, Call) -
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec play_invalid_prompt/2 :: (menu(), whapps_call:call()) -> {'ok', wh_json:json_object()} |
+-spec play_invalid_prompt/2 :: (menu(), whapps_call:call()) -> {'ok', wh_json:object()} |
                                                                {'error', atom()}.
 play_invalid_prompt(#cf_menu_data{invalid_media=false}, _) ->
     {ok, wh_json:new()};
@@ -286,7 +287,7 @@ play_invalid_prompt(#cf_menu_data{invalid_media=Id}, Call) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec play_transferring_prompt/2 :: (menu(), whapps_call:call()) -> {'ok', wh_json:json_object()} |
+-spec play_transferring_prompt/2 :: (menu(), whapps_call:call()) -> {'ok', wh_json:object()} |
                                                                     {'error', atom()}.
 play_transferring_prompt(#cf_menu_data{transfer_media=false}, _) ->
     {ok, wh_json:new()};
@@ -301,7 +302,7 @@ play_transferring_prompt(#cf_menu_data{transfer_media=Id}, Call) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec play_exit_prompt/2 :: (menu(), whapps_call:call()) -> {'ok', wh_json:json_object()} |
+-spec play_exit_prompt/2 :: (menu(), whapps_call:call()) -> {'ok', wh_json:object()} |
                                                             {'error', atom()}.
 play_exit_prompt(#cf_menu_data{exit_media=false}, _) ->
     {ok, wh_json:new()};
@@ -317,7 +318,7 @@ play_exit_prompt(#cf_menu_data{exit_media=Id}, Call) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec get_prompt/2 :: (menu(), whapps_call:call()) -> ne_binary().
-get_prompt(#cf_menu_data{greeting_id=undefined}, Call) ->
+get_prompt(#cf_menu_data{greeting_id='undefined'}, Call) ->
     whapps_util:get_prompt(<<"menu-no_prompt">>, Call);
 get_prompt(#cf_menu_data{greeting_id = <<"local_stream://", _/binary>> = ID}, _) ->
     ID;
@@ -329,8 +330,8 @@ get_prompt(#cf_menu_data{greeting_id=Id}, Call) ->
 %% @doc
 %% @end
 %%--------------------------------------------------------------------
--spec store_recording/3 :: (binary(), binary(), whapps_call:call()) -> {'ok', wh_json:json_object()} |
-                                                                       {'error', wh_json:json_object()}.
+-spec store_recording/3 :: (binary(), binary(), whapps_call:call()) -> {'ok', wh_json:object()} |
+                                                                       {'error', wh_json:object()}.
 store_recording(AttachmentName, MediaId, Call) ->
     lager:info("storing recording ~s as media ~s", [AttachmentName, MediaId]),
     ok = update_doc(<<"content_type">>, <<"audio/mpeg">>, MediaId, Call),
@@ -419,7 +420,8 @@ recording_media_doc(Type, #cf_menu_data{name=MenuName, menu_id=Id}, Call) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec update_doc/4 :: (list() | binary(), wh_json:json_term(), menu() | binary(),  whapps_call:call() | binary()) -> 'ok' | {'error', atom()}.
+-spec update_doc/4 :: (list() | binary(), wh_json:json_term(), menu() | binary(), whapps_call:call() | binary()) ->
+                              'ok' | {'error', atom()}.
 update_doc(Key, Value, #cf_menu_data{menu_id=Id}, Db) ->
     update_doc(Key, Value, Id, Db);
 update_doc(Key, Value, Id, Call) when is_tuple(Call) ->
@@ -445,7 +447,7 @@ update_doc(Key, Value, Id, Db) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec get_menu_profile/2 :: (wh_json:json_object(), whapps_call:call()) -> menu().
+-spec get_menu_profile/2 :: (wh_json:object(), whapps_call:call()) -> menu().
 get_menu_profile(Data, Call) ->
     Id = wh_json:get_value(<<"id">>, Data),
     AccountDb = whapps_call:account_db(Call),
@@ -477,11 +479,11 @@ get_menu_profile(Data, Call) ->
                      ,exit_media =
                          (not wh_json:is_false([<<"media">>, <<"exit_media">>], JObj))
                      andalso wh_json:get_ne_value([<<"media">>, <<"exit_media">>], JObj, true)
-                     ,transfer_media = 
+                     ,transfer_media =
                          (not wh_json:is_false([<<"media">>, <<"transfer_media">>], JObj))
                      andalso wh_json:get_ne_value([<<"media">>, <<"transfer_media">>], JObj, true)
                      ,invalid_media =
-                         (not wh_json:is_false([<<"media">>, <<"invalid_media">>], JObj)) 
+                         (not wh_json:is_false([<<"media">>, <<"invalid_media">>], JObj))
                      andalso wh_json:get_ne_value([<<"media">>, <<"invalid_media">>], JObj, true)
                     };
         {error, R} ->
