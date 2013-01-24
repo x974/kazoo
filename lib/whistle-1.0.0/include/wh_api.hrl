@@ -6,7 +6,7 @@
 -endif.
 
 -type api_formatter_return() :: {'ok', iolist()} | {'error', string()}.
--type api_headers() :: [ne_binary(),...] | [].
+-type api_headers() :: ne_binaries().
 
 %% For dialplan messages, what does the Invite-Format param accept as values?
 -define(INVITE_FORMAT_TUPLE, {<<"Invite-Format">>, [<<"username">>, <<"e164">>, <<"npan">>, <<"1npan">>, <<"route">>]}).

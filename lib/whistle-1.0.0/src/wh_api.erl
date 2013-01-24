@@ -129,8 +129,7 @@ prepare_api_payload(JObj, HeaderValues, FormatterFun) when is_function(Formatter
 %%--------------------------------------------------------------------
 -spec set_missing_values/2 :: (api_terms(), wh_proplist()) -> api_terms().
 set_missing_values(Prop, HeaderValues) when is_list(Prop) ->
-    lists:foldl(fun({_, V}, PropAcc) when is_list(V) ->
-                        PropAcc;
+    lists:foldl(fun({_, V}, PropAcc) when is_list(V) -> PropAcc;
                    ({K, _}=KV, PropAcc) ->
                         case is_empty(props:get_value(K, Prop)) of
                             true -> [ KV | PropAcc ];
@@ -153,8 +152,7 @@ remove_empty_values(JObj) ->
     Prop = remove_empty_values(wh_json:to_proplist(JObj)),
     wh_json:from_list(Prop).
 
-do_empty_value_removal([], Acc) ->
-    lists:reverse(Acc);
+do_empty_value_removal([], Acc) -> lists:reverse(Acc);
 do_empty_value_removal([{<<"Server-ID">>,_}=KV|T], Acc) ->
     do_empty_value_removal(T, [KV|Acc]);
 do_empty_value_removal([{<<"Msg-ID">>,_}=KV|T], Acc) ->
