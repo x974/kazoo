@@ -467,21 +467,19 @@ test_callflow_patterns([Pattern|T], Number, {_, Capture}=Result) ->
 %% certain actions, like cf_offnet and cf_resources
 %% @end
 %%--------------------------------------------------------------------
--spec handle_bridge_failure/2 :: ({'fail', wh_json:object()} | ne_binary() | 'undefined', whapps_call:call()) -> 'ok' | 'not_found'.
--spec handle_bridge_failure/3 :: (ne_binary() | 'undefined', ne_binary() | 'undefined', whapps_call:call()) -> 'ok' | 'not_found'.
+-spec handle_bridge_failure/2 :: ({'fail', wh_json:object()} | api_binary(), whapps_call:call()) -> 'ok' | 'not_found'.
+-spec handle_bridge_failure/3 :: (api_binary(), api_binary(), whapps_call:call()) -> 'ok' | 'not_found'.
 
 handle_bridge_failure({fail, Reason}, Call) ->
     {Cause, Code} = whapps_util:get_call_termination_reason(Reason),
     handle_bridge_failure(Cause, Code, Call);
-handle_bridge_failure(undefined, _) ->
-    not_found;
+handle_bridge_failure('undefined', _) -> 'not_found';
 handle_bridge_failure(Failure, Call) ->
     case cf_exe:attempt(Failure, Call) of
         {attempt_resp, ok} ->
             lager:info("found child branch to handle failure: ~s", [Failure]),
             ok;
-        {attempt_resp, _} ->
-            not_found
+        {attempt_resp, _} -> 'not_found'
     end.
 
 handle_bridge_failure(Cause, Code, Call) ->
@@ -491,7 +489,7 @@ handle_bridge_failure(Cause, Code, Call) ->
         true -> ok;
         false ->
             cf_exe:continue(Call),
-            not_found
+            'not_found'
     end.
 
 %%--------------------------------------------------------------------

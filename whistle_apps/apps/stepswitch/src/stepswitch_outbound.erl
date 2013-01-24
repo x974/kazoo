@@ -30,8 +30,7 @@
                           {'ready', wh_json:object()} |
                           {'fail', wh_json:object()}.
 
-init() ->
-    'ok'.
+init() -> 'ok'.
 
 %%--------------------------------------------------------------------
 %% @public
@@ -66,9 +65,10 @@ handle_req(<<"originate">>, JObj, Props) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec attempt_to_fulfill_bridge_req/4 :: (ne_binary(), ne_binary(), wh_json:object(), wh_proplist()) -> bridge_resp() |
-                                                                                                          execute_ext_resp() |
-                                                                                                          {'error', 'no_resources'}.
+-spec attempt_to_fulfill_bridge_req/4 :: (ne_binary(), ne_binary(), wh_json:object(), wh_proplist()) ->
+                                                 bridge_resp() |
+                                                 execute_ext_resp() |
+                                                 {'error', 'no_resources' | 'timeout'}.
 attempt_to_fulfill_bridge_req(Number, CtrlQ, JObj, Props) ->
     Result = case lookup_number(Number) of
                  {ok, AccountId} ->
@@ -121,11 +121,11 @@ attempt_to_fulfill_originate_req(Number, JObj, Props) ->
 %% the emergency CID.
 %% @end
 %%--------------------------------------------------------------------
--spec bridge_to_endpoints/4 :: (proplist(), boolean(), ne_binary(), wh_json:object()) -> {'error', 'no_resources'} | bridge_resp().
-bridge_to_endpoints([], _, _, _) ->
-    {error, no_resources};
+-spec bridge_to_endpoints/4 :: (wh_proplist(), boolean(), ne_binary(), wh_json:object()) ->
+                                       {'error', 'no_resources'} |
+                                       bridge_resp().
+bridge_to_endpoints([], _, _, _) -> {'error', 'no_resources'};
 bridge_to_endpoints(Endpoints, IsEmergency, CtrlQ, JObj) ->
-    lager:debug("found resources that bridge the number...to the cloud!"),
     Q = create_queue(),
 
     {CIDNum, CIDName} = case IsEmergency of
@@ -186,6 +186,8 @@ bridge_to_endpoints(Endpoints, IsEmergency, CtrlQ, JObj) ->
                ,{<<"Call-ID">>, wh_json:get_value(<<"Call-ID">>, JObj)}
                | wh_api:default_headers(Q, <<"call">>, <<"command">>, ?APP_NAME, ?APP_VERSION)
               ],
+
+    lager:debug("found resources that bridge the number...to the cloud!"),
     wapi_dialplan:publish_command(CtrlQ, props:filter_undefined(Command)),
     wait_for_bridge(whapps_config:get_integer(<<"stepswitch">>, <<"bridge_timeout">>, 30000)).
 
@@ -198,13 +200,11 @@ bridge_to_endpoints(Endpoints, IsEmergency, CtrlQ, JObj) ->
 %% the emergency CID.
 %% @end
 %%--------------------------------------------------------------------
--spec originate_to_endpoints/2 :: (proplist(), wh_json:object()) ->
+-spec originate_to_endpoints/2 :: (wh_proplist(), wh_json:object()) ->
                                           {'error', 'no_resources'} |
                                           originate_resp().
-originate_to_endpoints([], _) ->
-    {error, no_resources};
+originate_to_endpoints([], _) -> {'error', 'no_resources'};
 originate_to_endpoints(Endpoints, JObj) ->
-    lager:debug("found resources that can originate the number...to the cloud!"),
     Q = create_queue(),
 
     CIDNum = wh_json:get_ne_value(<<"Outgoing-Caller-ID-Number">>, JObj
@@ -256,6 +256,8 @@ originate_to_endpoints(Endpoints, JObj) ->
                  | wh_api:default_headers(Q, <<"resource">>, <<"originate_req">>, ?APP_NAME, ?APP_VERSION)
                 ]),
     wh_amqp_mgr:register_return_handler(),
+
+    lager:debug("found resources that can originate the number...to the cloud!"),
     wapi_resource:publish_originate_req(Request),
     wait_for_originate(MsgId).
 
@@ -363,7 +365,7 @@ wait_for_execute_extension() ->
 %% response then set the CCVs accordingly.
 %% @end
 %%--------------------------------------------------------------------
--spec wait_for_bridge/1 :: ('infinity' | pos_integer()) -> bridge_resp().
+-spec wait_for_bridge/1 :: (wh_timeout()) -> bridge_resp().
 wait_for_bridge(Timeout) ->
     Start = erlang:now(),
     receive
@@ -408,11 +410,11 @@ hangup_result(JObj) ->
         <<"sip:", Code/binary>> when SuccessfulCause ->
             try wh_util:to_integer(Code) < 400 of
                 true -> {ok, JObj};
-                false when SuccessfulCause -> 
+                false when SuccessfulCause ->
                     {fail, wh_json:set_value(<<"Application-Response">>, <<"NORMAL_TEMPORARY_FAILURE">>, JObj)};
                 false -> {fail, JObj}
             catch
-                _:_ when SuccessfulCause -> {ok, JObj}; 
+                _:_ when SuccessfulCause -> {ok, JObj};
                 _:_  -> {fail, JObj}
             end;
         _Else when SuccessfulCause -> {ok, JObj};
@@ -460,7 +462,8 @@ get_event_type(JObj) ->
 %% component of a Whistle dialplan bridge API.
 %% @end
 %%--------------------------------------------------------------------
--spec find_endpoints/4 :: (ne_binary(), [] | [ne_binary(),...], endpoints(), wh_json:object()) -> {wh_proplist(), boolean()}.
+-spec find_endpoints/4 :: (ne_binary(), ne_binaries(), endpoints(), wh_json:object()) ->
+                                  {wh_proplist(), boolean()}.
 find_endpoints(Number, Flags, Resources, JObj) ->
     Endpoints = case Flags of
                     'undefined' ->
@@ -495,8 +498,10 @@ contains_emergency_endpoint([{_, _, _, _, IsEmergency}|T], UseEmergency) ->
 %% in a delay between resources
 %% @end
 %%--------------------------------------------------------------------
--spec build_endpoints/2 :: (endpoints(), wh_json:object()) -> wh_proplist().
--spec build_endpoints/4 :: (endpoints(), wh_json:object(), non_neg_integer(), wh_proplist()) -> wh_proplist().
+-spec build_endpoints/2 :: (endpoints(), wh_json:object()) ->
+                                   wh_proplist().
+-spec build_endpoints/4 :: (endpoints(), wh_json:object(), non_neg_integer(), wh_proplist()) ->
+                                   wh_proplist().
 build_endpoints(Endpoints, JObj) ->
     build_endpoints(Endpoints, JObj, 0, []).
 
@@ -558,7 +563,12 @@ build_endpoint(Number, Gateway, _Delay, JObj) ->
 %% create and send a Whistle offnet resource response
 %% @end
 %%--------------------------------------------------------------------
--spec response/2 :: ({'error', 'no_resources'} | bridge_resp() | execute_ext_resp() | originate_resp(), wh_json:object()) -> wh_proplist().
+-spec response/2 :: ({'error', 'no_resources' | 'timeout'}
+                     | bridge_resp()
+                     | execute_ext_resp()
+                     | originate_resp()
+                     ,wh_json:object()) ->
+                            wh_proplist().
 response({ok, Resp}, JObj) ->
     lager:debug("outbound request successfully completed"),
     [{<<"Call-ID">>, wh_json:get_value(<<"Call-ID">>, JObj)}
@@ -597,7 +607,7 @@ response({error, no_resources}, JObj) ->
      ,{<<"To-DID">>, wh_json:get_value(<<"To-DID">>, JObj)}
      | wh_api:default_headers(?APP_NAME, ?APP_VERSION)
     ];
-response({error, timeout}, JObj) ->
+response({'error', 'timeout'}, JObj) ->
     lager:debug("attempt to connect to resources timed out"),
     [{<<"Call-ID">>, wh_json:get_value(<<"Call-ID">>, JObj)}
      ,{<<"Msg-ID">>, wh_json:get_value(<<"Msg-ID">>, JObj, <<>>)}
@@ -672,7 +682,7 @@ get_emergency_cid_number(JObj) ->
     case couch_mgr:open_cache_doc(AccountDb, ?WNM_PHONE_NUMBER_DOC) of
         {ok, PhoneNumbers} ->
             Numbers = wh_json:get_keys(wh_json:public_fields(PhoneNumbers)),
-            E911Enabled = [Number 
+            E911Enabled = [Number
                            || Number <- Numbers
                                   ,lists:member(<<"dash_e911">>, wh_json:get_value([Number, <<"features">>], PhoneNumbers, []))
                           ],
@@ -682,8 +692,8 @@ get_emergency_cid_number(JObj) ->
             get_emergency_cid_number(Requested, Candidates, [])
     end.
 
--spec get_emergency_cid_number/3 :: (ne_binary(), ['undefined' | ne_binary(),...], [ne_binary(),...] | []) -> ne_binary().
-%% if there are no e911 enabled numbers then either use the global system default 
+-spec get_emergency_cid_number/3 :: (ne_binary(), api_binaries(), ne_binaries()) -> ne_binary().
+%% if there are no e911 enabled numbers then either use the global system default
 %% or the requested (if there isnt one)
 get_emergency_cid_number(Requested, _, []) ->
     case whapps_config:get_non_empty(<<"stepswitch">>, <<"default_emergency_cid_number">>) of

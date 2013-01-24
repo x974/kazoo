@@ -47,7 +47,6 @@
 start_link(_) ->
     gen_server:start_link(?MODULE, [], []).
 
-
 lookup(JObj) ->
     CNAM = case get_cnam(JObj) of
                <<>> -> wh_json:get_value(<<"Caller-ID-Name">>, JObj, <<"UNKNOWN">>);
@@ -57,7 +56,6 @@ lookup(JObj) ->
              ,{[<<"Custom-Channel-Vars">>, <<"Caller-ID-Name">>], CNAM}
             ],
     wh_json:set_values(Props, JObj).
-    
 
 get_cnam(JObj) ->
     Number = wh_json:get_value(<<"Caller-ID-Number">>, JObj, <<"0000000000">>),
@@ -67,7 +65,7 @@ get_cnam(JObj) ->
         {error, not_found} ->
             fetch_cnam(Num, wh_json:set_value(<<"phone_number">>, wh_util:uri_encode(Num), JObj))
     end.
-    
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -179,9 +177,8 @@ code_change(_OldVsn, TemplateName, _Extra) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec json_to_template_props/1 :: ('undefined' | wh_json:json_object()) -> 'undefined' | proplist().
-json_to_template_props(undefined) ->
-    undefined;
+-spec json_to_template_props/1 :: ('undefined' | wh_json:object()) -> 'undefined' | wh_proplist().
+json_to_template_props('undefined') -> 'undefined';
 json_to_template_props(JObj) ->
     normalize_proplist(wh_json:recursive_to_proplist(JObj)).
 
@@ -191,7 +188,7 @@ json_to_template_props(JObj) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec normalize_proplist/1 :: (proplist()) -> proplist().
+-spec normalize_proplist/1 :: (wh_proplist()) -> wh_proplist().
 normalize_proplist(Props) ->
     [normalize_proplist_element(Elem) || Elem <- Props].
 
@@ -233,7 +230,7 @@ make_request(Number, JObj) ->
             lager:debug("cnam lookup for ~p failed: ~p", [Number, _R]),
             <<>>
     end.
-                                                            
+
 get_http_url(JObj) ->
     Template = whapps_config:get_binary(?CONFIG_CAT, <<"http_url">>, ?DEFAULT_URL),
     {ok, Url} = render(JObj, Template),
@@ -243,8 +240,8 @@ get_http_body(JObj) ->
     Template = whapps_config:get_binary(?CONFIG_CAT, <<"http_body">>, ?DEFAULT_CONTENT),
     case wh_util:is_empty(Template) of
         true -> [];
-        false -> 
-            {ok, Body} = render(Template, JObj),
+        false ->
+            {ok, Body} = render(JObj, Template),
             lists:flatten(Body)
     end.
 
@@ -258,7 +255,7 @@ get_http_options(Url) ->
     Defaults = [{response_format, binary}
                 ,{connect_timeout, 500}
                ],
-    Routines = [fun maybe_enable_ssl/2 
+    Routines = [fun maybe_enable_ssl/2
                 ,fun maybe_enable_auth/2
                ],
     lists:foldl(fun(F, P) -> F(Url, P) end, Defaults, Routines).
@@ -282,7 +279,9 @@ get_http_method() ->
         _Else -> get
     end.
 
--spec render/2 :: (wh_json:json_object(), ne_binary()) -> {'ok', iolist()} | {'error', 'timeout'}.
+-spec render/2 :: (wh_json:object(), ne_binary()) ->
+                          {'ok', iolist()} |
+                          {'error', 'timeout'}.
 render(JObj, Template) ->
     case catch poolboy:checkout(?STEPSWITCH_CNAM_POOL, false, 1000) of
         W when is_pid(W) ->
