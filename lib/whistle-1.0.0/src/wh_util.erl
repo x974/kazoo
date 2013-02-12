@@ -182,22 +182,8 @@ format_account_id(AccountId, raw) ->
 %%--------------------------------------------------------------------
 -spec current_account_balance/1 :: (api_binary()) -> integer().
 current_account_balance('undefined') -> 0;
-current_account_balance(Ledger) ->
-    LedgerDb = wh_util:format_account_id(Ledger, encoded),
-    ViewOptions = [{<<"reduce">>, true}],
-    case couch_mgr:get_results(LedgerDb, <<"transactions/credit_remaining">>, ViewOptions) of
-        {ok, []} ->
-            lager:debug("no current balance for ~s", [Ledger]),
-            0;
-        {ok, [ViewRes|_]} ->
-            Credit = wh_json:get_integer_value(<<"value">>, ViewRes, 0),
-            lager:debug("current balance for ~s is ~p", [Ledger, Credit]),
-            Credit;
-        {error, _R} ->
-            lager:debug("unable to get current balance for ~s: ~p", [Ledger, _R]),
-            0
-    end.
-
+current_account_balance(AccountId) ->
+    wh_transaction:get_current_balance(AccountId).
 %%--------------------------------------------------------------------
 %% @public
 %% @doc
