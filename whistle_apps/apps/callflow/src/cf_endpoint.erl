@@ -89,6 +89,8 @@ merge_attributes(Endpoint) ->
                 ,<<"name">>
                 ,<<"do_not_disturb">>
                 ,<<"call_forward">>
+                ,<<"call_restriction">>
+                ,?CF_ATTR_LOWER_KEY
            ],
     merge_attributes(Keys, undefined, Endpoint, undefined).
 
@@ -115,6 +117,21 @@ merge_attributes(Keys, undefined, Endpoint, Owner) ->
             merge_attributes(Keys, wh_json:new(), Endpoint, Owner)
     end;
 merge_attributes([], _, Endpoint, _) -> Endpoint;
+merge_attributes([<<"call_restriction">>|Keys], Account, Endpoint, Owner) ->
+    Classifiers = wh_json:get_keys(wnm_util:available_classifiers()),
+    Update = merge_call_restrictions(Classifiers, Account, Endpoint, Owner),
+    merge_attributes(Keys, Account, Update, Owner);
+merge_attributes([?CF_ATTR_LOWER_KEY|Keys], Account, Endpoint, Owner) ->
+    FullKey = [?CF_ATTR_LOWER_KEY, ?CF_ATTR_UPPER_KEY],
+    OwnerAttr = wh_json:get_integer_value(FullKey, Owner, 5),
+    EndpointAttr = wh_json:get_integer_value(FullKey, Endpoint, 5),
+    case EndpointAttr < OwnerAttr of
+        true ->
+            merge_attributes(Keys, Account, Endpoint, Owner);
+        false ->
+            Update = wh_json:set_value(FullKey, OwnerAttr, Endpoint), 
+            merge_attributes(Keys, Account, Update, Owner)
+    end;
 merge_attributes([<<"name">> = Key|Keys], Account, Endpoint, Owner) ->
     AccountName = wh_json:get_ne_value(Key, Account),
     EndpointName = wh_json:get_ne_value(Key, Endpoint),
@@ -140,6 +157,19 @@ merge_attributes([Key|Keys], Account, Endpoint, Owner) ->
     Merged1 = wh_json:merge_recursive(AccountAttr, EndpointAttr),
     Merged2 = wh_json:merge_recursive(Merged1, OwnerAttr),
     merge_attributes(Keys, Account, wh_json:set_value(Key, Merged2, Endpoint), Owner).
+
+-spec merge_call_restrictions/4 :: (ne_binaries(), wh_json:object(), wh_json:object(), wh_json:object()) -> wh_json:object().
+merge_call_restrictions([], _, Endpoint, _) -> Endpoint;
+merge_call_restrictions([Key|Keys], Account, Endpoint, Owner) ->
+    case wh_json:get_value([<<"call_restriction">>, Key, <<"action">>], Account) =:= <<"deny">>
+        orelse wh_json:get_value([<<"call_restriction">>, Key, <<"action">>], Owner) =:= <<"deny">>
+    of
+        true -> 
+            Update = wh_json:set_value([<<"call_restriction">>, Key, <<"action">>], <<"deny">>, Endpoint),
+            merge_call_restrictions(Keys, Account, Update, Owner);
+        false ->
+            merge_call_restrictions(Keys, Account, Endpoint, Owner)
+    end.
 
 -spec create_endpoint_name/4 :: (api_binary(), api_binary(), api_binary(), api_binary()) -> api_binary().
 create_endpoint_name(undefined, undefined, undefined, Account) -> Account;

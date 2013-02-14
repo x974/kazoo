@@ -31,7 +31,7 @@ get_mac_address(#cb_context{doc=JObj}) ->
     case wh_json:get_ne_value(<<"mac_address">>, JObj) of
         undefined -> undefined;
         MACAddress ->
-            re:replace(wh_util:to_string(MACAddress)
+            re:replace(wh_util:to_list(MACAddress)
                        ,"[^0-9a-fA-F]"
                        ,""
                        ,[{return, list}, global])
@@ -49,14 +49,17 @@ maybe_provision(#cb_context{resp_status=success}=Context) ->
     case MACAddress =/= undefined
         andalso whapps_config:get_binary(?MOD_CONFIG_CAT, <<"provisioning_type">>) 
     of
-        <<"full_provisioner">> ->
-            spawn(fun() -> do_full_provision(MACAddress, Context) end),
-            true;
-        <<"simple_provisioner">>  ->
-            spawn(fun() -> do_simple_provision(MACAddress, Context) end),
+        <<"super_awesome_provisioner">> ->
+            spawn(fun() ->
+                          do_full_provisioner_provider(MACAddress, Context),
+                          do_full_provision(MACAddress, Context)
+                  end),
             true;
         <<"awesome_provisioner">> ->
             spawn(fun() -> do_awesome_provision(MACAddress, Context) end),
+            true;
+        <<"simple_provisioner">>  ->
+            spawn(fun() -> do_simple_provision(MACAddress, Context) end),
             true;
         _ -> false
     end;
@@ -65,13 +68,17 @@ maybe_provision(_) -> false.
 -spec maybe_send_contact_list/1 :: (cb_context:context()) -> cb_context:context().
 maybe_send_contact_list(#cb_context{resp_status=success}=Context) ->
     _ = case whapps_config:get_binary(?MOD_CONFIG_CAT, <<"provisioning_type">>) of
-            <<"full_provisioner">> ->
+            <<"super_awesome_provisioner">> ->
                 spawn(fun() -> do_full_provision_contact_list(Context) end);
             _ -> ok
         end,
     Context;
 maybe_send_contact_list(Context) ->
     Context.
+
+-spec do_full_provisioner_provider/2 :: (ne_binary(), #cb_context{}) -> boolean().
+do_full_provisioner_provider(_, #cb_context{db_name=AccountDb, account_id=AccountId}) ->
+    do_full_provision_contact_list(AccountId, AccountDb).
 
 -spec do_full_provision_contact_list/1 :: (#cb_context{}) -> boolean().
 -spec do_full_provision_contact_list/2 :: (ne_binary(), ne_binary()) -> boolean().
@@ -84,9 +91,26 @@ do_full_provision_contact_list(#cb_context{db_name=AccountDb, account_id=Account
     end.
 
 do_full_provision_contact_list(AccountId, AccountDb) ->
-    JObj = provisioner_contact_list:build(AccountDb),
-    PartialURL = <<AccountId/binary, "/">>,
-    send_to_full_provisioner(wh_json:from_list([{<<"directory">>, JObj}]), PartialURL).
+    case couch_mgr:open_cache_doc(AccountDb, AccountId) of
+        {ok, JObj} ->
+            Routines = [fun(J) -> wh_json:public_fields(J) end 
+                        ,fun(J) -> 
+                                 ResellerId = wh_services:find_reseller_id(AccountId),
+                                 wh_json:set_value(<<"provider_id">>, ResellerId, J)
+                         end
+                        ,fun(J) -> wh_json:delete_key(<<"available_apps">>, J) end
+                        ,fun(J) ->
+                                 ContactList = provisioner_contact_list:build(AccountDb),
+                                 wh_json:set_value(<<"directory">>, ContactList, J)
+                         end
+                       ],
+            Provider = lists:foldl(fun(F, J) -> F(J) end, JObj, Routines),
+            PartialURL = <<AccountId/binary, "/">>,
+            send_to_full_provisioner(Provider, PartialURL);
+        {error, _R} ->
+            lager:warning("failed to get account definition for ~s: ~p", [AccountId, _R]),
+            false
+    end.
 
 should_build_contact_list(#cb_context{doc=JObj}=Context) ->
     OriginalJObj = cb_context:fetch(db_doc, Context), 
@@ -186,7 +210,7 @@ do_simple_provision(MACAddress, #cb_context{doc=JObj}=Context) ->
 %%--------------------------------------------------------------------
 -spec do_full_provision/2 :: (string(), #cb_context{}) -> boolean().
 do_full_provision(MACAddress, #cb_context{}=Context) ->
-    case get_merged_device(Context) of
+    case get_merged_device(MACAddress, Context) of
         {error, _} -> false;
         {ok, #cb_context{doc=JObj}} ->
             do_full_provision(MACAddress, JObj)
@@ -202,10 +226,21 @@ send_to_full_provisioner(JObj, PartialURL) ->
         undefined -> false;
         Url ->
             Headers = [{"Content-Type", "application/json"}],
-            Body = wh_util:to_list(wh_json:encode(JObj)),
             FullUrl = wh_util:to_lower_string(<<Url/binary, "/", PartialURL/binary>>),
-            lager:debug("posting to ~s with: ~-300p", [FullUrl, Body]),
-            Res = ibrowse:send_req(FullUrl, Headers, put, Body, [{inactivity_timeout, 10000}]),
+            {ok, _, _, RawJObj} = ibrowse:send_req(FullUrl, Headers, get, "", [{inactivity_timeout, 10000}]),
+            {Verb, Body} = case wh_json:get_integer_value([<<"error">>, <<"code">>], wh_json:decode(RawJObj)) of
+                               undefined -> 
+                                   Props = [{<<"provider_id">>, wh_json:get_value(<<"provider_id">>, JObj)}
+                                            ,{<<"name">>, wh_json:get_value(<<"name">>, JObj)}
+                                            ,{<<"settings">>, JObj}
+                                           ],
+                                   J =  wh_json:from_list(props:filter_undefined(Props)),
+                                   {post,  wh_util:to_list(wh_json:encode(J))};
+                               404 -> 
+                                   {put, wh_util:to_list(wh_json:encode(JObj))} 
+                           end,
+            lager:debug("making ~s request to ~s with: ~-300p", [Verb, FullUrl, Body]),  
+            Res = ibrowse:send_req(FullUrl, Headers, Verb, Body, [{inactivity_timeout, 10000}]),
             lager:debug("response from server: ~p", [Res]),
             true
     end.
@@ -231,30 +266,27 @@ do_awesome_provision(_MACAddress, Context) ->
 %% 
 %% @end
 %%--------------------------------------------------------------------
--spec get_merged_device/1 :: (cb_context:context()) -> {ok, cb_context:context()} | {error, binary()}.
-get_merged_device(Context) ->
-    case merge_device(Context) of
+-spec get_merged_device/2 :: (ne_binary(), cb_context:context()) -> {ok, cb_context:context()} | {error, binary()}.
+get_merged_device(MACAddress, Context) ->
+    case merge_device(MACAddress, Context) of
         {error, _}=E -> E;
         {ok, Data} ->
             {ok, Context#cb_context{doc=Data}}
     end.
 
--spec merge_device/1 :: (cb_context:context()) -> {ok, wh_json:json_object()} | {error, binary()}.
-merge_device(#cb_context{doc=JObj, account_id=AccountId}) ->
-    case get_account(AccountId) of
-        {error, _}=E -> E;
-        {ok, Account} ->
-            Routines = [fun(J) -> wh_json:merge_recursive(Account, J) end
-                        ,fun(J) -> 
-                                 OwnerId = wh_json:get_ne_value(<<"owner_id">>, JObj),
-                                 Owner = get_owner(OwnerId, AccountId),
-                                 wh_json:merge_recursive(J, Owner) 
-                         end
-                        ,fun(J) -> wh_json:set_value(<<"account_id">>, AccountId, J) end
-                       ],
-            MergedDevice = lists:foldl(fun(F, J) -> F(J) end, JObj, Routines),
-            {ok, wh_json:public_fields(MergedDevice)}
-    end.
+-spec merge_device/2 :: (ne_binary(), cb_context:context()) -> {ok, wh_json:json_object()} | {error, binary()}.
+merge_device(MACAddress, #cb_context{doc=JObj, account_id=AccountId}) ->
+    Routines = [fun(J) -> wh_json:set_value(<<"mac_address">>, MACAddress, J) end
+                ,fun(J) -> 
+                        OwnerId = wh_json:get_ne_value(<<"owner_id">>, JObj),
+                        Owner = get_owner(OwnerId, AccountId),
+                        wh_json:merge_recursive(J, Owner) 
+                 end
+                ,fun(J) -> wh_json:delete_key(<<"apps">>, J) end
+                ,fun(J) -> wh_json:set_value(<<"account_id">>, AccountId, J) end
+               ],
+    MergedDevice = lists:foldl(fun(F, J) -> F(J) end, JObj, Routines),
+    {ok, wh_json:public_fields(MergedDevice)}.
 
 -spec get_owner/2 :: (api_binary(), ne_binary()) -> wh_json:json_object().
 get_owner(undefined, _) ->
@@ -267,17 +299,6 @@ get_owner(OwnerId, AccountId) ->
         {error, _R} ->
             lager:debug("unable to open user definition ~s/~s: ~p", [AccountDb, OwnerId, _R]),
             wh_json:new()
-    end.
-
--spec get_account/1 :: (ne_binary()) -> wh_json:json_object().
-get_account(AccountId) ->
-    AccountDb = wh_util:format_account_id(AccountId, encoded),
-    case couch_mgr:open_cache_doc(AccountDb, AccountId) of
-        {ok, Account} ->
-            {ok, Account};
-        {error, _R}=E ->
-            lager:debug("unable to open account definition ~s/~s: ~p", [AccountDb, AccountId, _R]),
-            E
     end.
 
 %%--------------------------------------------------------------------
