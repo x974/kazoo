@@ -184,6 +184,7 @@ format_account_id(AccountId, raw) ->
 current_account_balance('undefined') -> 0;
 current_account_balance(AccountId) ->
     wh_transaction:get_current_balance(AccountId).
+
 %%--------------------------------------------------------------------
 %% @public
 %% @doc
