@@ -74,6 +74,7 @@
 %%% API
 %%%===================================================================
 
+-spec start_link() -> startlink_ret().
 start_link() -> gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 %% returns 'ok' or {'error', some_error_atom_explaining_more}
@@ -231,7 +232,6 @@ init([]) ->
     _ = spawn_link(fun() -> start_preconfigured_servers() end),
     _ = ets:new('sip_subscriptions', ['set', 'public', 'named_table', {'keypos', #sip_subscription.key}]),
     _ = ets:new(?CHANNELS_TBL, ['set', 'protected', 'named_table', {'keypos', #channel.uuid}]),
-    _ = ets:new(?CONFERENCES_TBL, ['set', 'protected', 'named_table', {'keypos', #conference.name}]),
 
     _ = erlang:send_after(?EXPIRE_CHECK, self(), 'expire_sip_subscriptions'),
     {'ok', #state{}}.
@@ -319,75 +319,6 @@ handle_cast({'destroy_channel', UUID, Node}, State) ->
     lager:debug("removed ~p channel(s) with id ~s on ~s", [N, UUID, Node]),
     {'noreply', State, 'hibernate'};
 
-handle_cast({'new_conference', #conference{node=Node, name=Name}=C}, State) ->
-    case ets:lookup(?CONFERENCES_TBL, Name) of
-        [] ->
-            lager:debug("creating new conference ~s on node ~s", [Name, Node]),
-            ets:insert(?CONFERENCES_TBL, C);
-        [#conference{node=Node}] -> lager:debug("conference ~s already on node ~s", [Name, Node]);
-        [#conference{node=_Other}] -> lager:debug("conference ~s already on ~s, not ~s", [Name, _Other, Node])
-    end,
-    {'noreply', State, 'hibernate'};
-handle_cast({'conference_update', Node, Name, Update}, State) ->
-    case ets:lookup(?CONFERENCES_TBL, Name) of
-        [#conference{node=Node}] ->
-            ets:update_element(?CONFERENCES_TBL, Name, Update),
-            lager:debug("conference ~s already on node ~s", [Name, Node]);
-        [#conference{node=_Other}] -> lager:debug("conference ~s already on ~s, not ~s, ignoring update", [Name, _Other, Node]);
-        [] -> lager:debug("no conference ~s on ~s, ignoring update", [Name, Node])
-    end,
-    {'noreply', State, 'hibernate'};
-
-handle_cast({'participant_update', Node, UUID, Update}, State) ->
-    case ets:lookup(?CONFERENCES_TBL, UUID) of
-        [] ->
-            lager:debug("no participant ~s, creating", [Node]),
-            'true' = ets:insert_new(?CONFERENCES_TBL, #participant{uuid=UUID}),
-            'true' = ets:update_element(?CONFERENCES_TBL, UUID, Update);
-        [#participant{node=Node}] ->
-            lager:debug("participant ~s on ~s, applying update", [UUID, Node]),
-            ets:update_element(?CONFERENCES_TBL, UUID, Update);
-        [#participant{node=_OtherNode}] ->
-            lager:debug("participant ~s is on ~s, not ~s, ignoring update", [UUID, _OtherNode, Node])
-    end,
-    {'noreply', State, 'hibernate'};
-
-handle_cast({'conference_destroy', Node, Name}, State) ->
-    MatchSpecC = [{#conference{name='$1', node='$2', _ = '_'}
-                   ,[{'andalso', {'=:=', '$2', {'const', Node}}
-                      ,{'=:=', '$1', Name}
-                     }
-                    ],
-                   ['true']
-                  }],
-    N = ets:select_delete(?CONFERENCES_TBL, MatchSpecC),
-    lager:debug("removed ~p conference(s) with id ~s on ~s", [N, Name, Node]),
-
-    MatchSpecP = [{#participant{conference_name='$1', node='$2', _ = '_'}
-                   ,[{'andalso', {'=:=', '$2', {'const', Node}}
-                      ,{'=:=', '$1', Name}
-                     }
-                    ],
-                   ['true']
-                  }],
-    N1 = ets:select_delete(?CONFERENCES_TBL, MatchSpecP),
-    lager:debug("removed ~p participant(s) in conference ~s on ~s", [N1, Name, Node]),
-
-    {'noreply', State, 'hibernate'};
-
-handle_cast({'participant_destroy', Node, UUID}, State) ->
-    MatchSpec = [{#participant{uuid='$1', node='$2', _ = '_'}
-                  ,[{'andalso'
-                     ,{'=:=', '$2', {'const', Node}}
-                     ,{'=:=', '$1', UUID}
-                    }
-                   ],
-                  ['true']
-                 }],
-    N = ets:select_delete(?CONFERENCES_TBL, MatchSpec),
-    lager:debug("removed ~p participants(s) with id ~s on ~s", [N, UUID, Node]),
-    {'noreply', State, 'hibernate'};
-
 handle_cast({'sync_channels', Node, Channels}, State) ->
     lager:debug("ensuring channel cache is in sync with ~s", [Node]),
     MatchSpec = [{#channel{uuid = '$1', node = '$2', _ = '_'}
@@ -415,19 +346,6 @@ handle_cast({'sync_channels', Node, Channels}, State) ->
         ],
     {'noreply', State, 'hibernate'};
 
-handle_cast({'sync_conferences', Node, Conferences}, State) ->
-    lager:debug("ensuring conferences cache is in sync with ~s", [Node]),
-
-    CachedConferences = ets:match_object(?CONFERENCES_TBL, #conference{node = Node, _ = '_'}) ++
-        ets:match_object(?CONFERENCES_TBL, #participant{node = Node, _ = '_'}),
-
-    Remove = subtract_from(CachedConferences, Conferences),
-    Add = subtract_from(Conferences, CachedConferences),
-
-    _ = [ets:delete_object(?CONFERENCES_TBL, R) || R <- Remove],
-    _ = [ets:insert(?CONFERENCES_TBL, C) || C <- Add],
-    {'noreply', State, 'hibernate'};
-
 handle_cast({'flush_node_channels', Node}, State) ->
     lager:debug("flushing all channels in cache associated to node ~s", [Node]),
     MatchSpec = [{#channel{node = '$1', _ = '_'}
@@ -435,21 +353,6 @@ handle_cast({'flush_node_channels', Node}, State) ->
                   ,['true']}
                 ],
     ets:select_delete(?CHANNELS_TBL, MatchSpec),
-    {'noreply', State};
-
-handle_cast({'flush_node_conferences', Node}, State) ->
-    lager:debug("flushing all conferences in cache associated to node ~s", [Node]),
-    MatchSpecC = [{#conference{node = '$1', _ = '_'}
-                   ,[{'=:=', '$1', {'const', Node}}]
-                   ,['true']}
-                 ],
-    _ = ets:select_delete(?CHANNELS_TBL, MatchSpecC),
-
-    MatchSpecP = [{#participant{node = '$1', _ = '_'}
-                   ,[{'=:=', '$1', {'const', Node}}]
-                   ,['true']}
-                 ],
-    _ = ets:select_delete(?CHANNELS_TBL, MatchSpecP),
     {'noreply', State};
 
 handle_cast(_Cast, State) ->
@@ -473,11 +376,11 @@ handle_info({'event', [UUID | Props]}, State) ->
         <<"CHANNEL_DESTROY">> ->
             ecallmgr_fs_channel:destroy(Props, Node),
             ecallmgr_fs_conference:participant_destroy(Node, UUID);
-        <<"channel_move::move_complete">> ->
+        ?CHANNEL_MOVE_COMPLETE_EVENT_BIN ->
             MoveUUID = props:get_value(<<"old_node_channel_uuid">>, Props),
             ecallmgr_fs_channel:set_node(Node, MoveUUID),
             gproc:send({'p', 'l', ?CHANNEL_MOVE_REG(Node, MoveUUID)}, ?CHANNEL_MOVE_COMPLETE_MSG(Node, MoveUUID, Props));
-        <<"channel_move::move_released">> ->
+        ?CHANNEL_MOVE_RELEASED_EVENT_BIN ->
             MoveUUID = props:get_value(<<"old_node_channel_uuid">>, Props),
             gproc:send({'p', 'l', ?CHANNEL_MOVE_REG(Node, UUID)}, ?CHANNEL_MOVE_RELEASED_MSG(Node, MoveUUID, Props));
         <<"conference::maintenance">> -> ecallmgr_fs_conference:event(Node, UUID, Props);
@@ -531,7 +434,6 @@ handle_info(_Info, State) ->
 terminate(_Reason, _State) ->
     ets:delete('sip_subscriptions'),
     ets:delete(?CHANNELS_TBL),
-    ets:delete(?CONFERENCES_TBL),
     lager:debug("fs nodes termination: ~p", [ _Reason]).
 
 %%--------------------------------------------------------------------
@@ -719,7 +621,8 @@ get_fs_cookie(Cookie, _) when is_atom(Cookie) ->
 bind_to_fs_events(#node{node=NodeName, client_version = <<"mod_kazoo", _/binary>>}) ->
     freeswitch:event(NodeName, ['CHANNEL_CREATE', 'CHANNEL_DESTROY'
                                 ,'CHANNEL_EXECUTE_COMPLETE', 'CHANNEL_ANSWER'
-                                ,'CUSTOM', 'channel_move::move_complete'
+                                ,'CUSTOM', ?CHANNEL_MOVE_COMPLETE_EVENT
+                                ,<<"conference::maintenance">>
                                ]);
 bind_to_fs_events(#node{node=NodeName}) ->
     %% gproc throws a badarg if the binding already exists, and since
@@ -730,17 +633,15 @@ bind_to_fs_events(#node{node=NodeName}) ->
     catch gproc:reg({p, l, ?FS_EVENT_REG_MSG(NodeName, <<"CHANNEL_CREATE">>)}),
     catch gproc:reg({p, l, ?FS_EVENT_REG_MSG(NodeName, <<"CHANNEL_DESTROY">>)}),
     catch gproc:reg({p, l, ?FS_EVENT_REG_MSG(NodeName, <<"CHANNEL_ANSWER">>)}),
-    catch gproc:reg({p, l, ?FS_EVENT_REG_MSG(NodeName, <<"channel_move::move_complete">>)}),
+    catch gproc:reg({p, l, ?FS_EVENT_REG_MSG(NodeName, ?CHANNEL_MOVE_COMPLETE_EVENT_BIN)}),
     catch gproc:reg({p, l, ?FS_EVENT_REG_MSG(NodeName, <<"conference::maintenance">>)}),
     catch gproc:reg({p, l, ?FS_EVENT_REG_MSG(NodeName, <<"CHANNEL_EXECUTE_COMPLETE">>)}),
     'ok'.
 
 -spec unbind_from_fs_events(fs_node()) -> 'ok'.
-unbind_from_fs_events(#node{}) ->
-    'ok'.
+unbind_from_fs_events(#node{}) -> 'ok'.
 
--spec get_fs_client_version(fs_node()) -> fs_node();
-                           (atom()) -> api_binary().
+-spec get_fs_client_version(fs_node() | atom()) -> fs_node() | api_binary().
 get_fs_client_version(#node{node=NodeName}=Node) ->
     Node#node{client_version=get_fs_client_version(NodeName)};
 get_fs_client_version(NodeName) ->
@@ -964,12 +865,3 @@ get_other_leg(_UUID, _Props, OtherLeg) -> OtherLeg.
 
 get_other_leg_1(UUID, UUID, OtherLeg) -> OtherLeg;
 get_other_leg_1(UUID, OtherLeg, UUID) -> OtherLeg.
-
-subtract_from([], _) -> [];
-subtract_from(Set1, []) -> Set1;
-subtract_from(Set1, [S2|Set2]) ->
-    subtract_from([S1 || S1 <- Set1, should_remove(S1, S2)], Set2).
-
-should_remove(#participant{uuid=UUID1}, #participant{uuid=UUID2}) -> UUID1 =/= UUID2;
-should_remove(#conference{name=N1}, #conference{name=N2}) -> N1 =/= N2;
-should_remove(_, _) -> 'true'.
