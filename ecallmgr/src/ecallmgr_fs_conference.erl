@@ -125,6 +125,9 @@ props_to_record(Props, Node) ->
                 ,name=props:get_value(<<"Conference-Name">>, Props)
                 ,participants=props:get_integer_value(<<"Conference-Size">>, Props, 0)
                 ,profile_name=props:get_value(<<"Conference-Profile-Name">>, Props)
+                ,switch_hostname=props:get_value(<<"FreeSWITCH-Hostname">>, Props)
+                ,switch_url=props:get_value(<<"URL">>, Props)
+                ,switch_external_ip=props:get_value(<<"Ext-SIP-IP">>, Props)
                }.
 
 props_to_participant_record(Node, Props) ->
@@ -189,6 +192,9 @@ record_to_json(#conference{uuid=UUID
                            ,answered=Answered
                            ,dynamic=Dynamic
                            ,run_time=RunTime
+                           ,switch_hostname=SwitchHostname
+                           ,switch_url=SwitchUrl
+                           ,switch_external_ip=SwitchExtIp
                           }) ->
     wh_json:from_list(
       props:filter_undefined(
@@ -202,6 +208,9 @@ record_to_json(#conference{uuid=UUID
          ,{<<"Answered">>, Answered}
          ,{<<"Dynamic">>, Dynamic}
          ,{<<"Run-Time">>, RunTime}
+         ,{<<"Switch-Hostname">>, SwitchHostname}
+         ,{<<"Switch-URL">>, SwitchUrl}
+         ,{<<"Switch-External-IP">>, SwitchExtIp}
         ])).
 
 participant_record_to_json(#participant{uuid=UUID
@@ -271,11 +280,16 @@ update_participant(Node, UUID, Props) ->
                                  ,[{#participant.node, Node} | participant_fields(Props)]
                                 }).
 
-update_conference(Node, Props) ->
+update_conference(Node, Props) ->    
+    ProfileProps = ecallmgr_util:get_interface_properties(Node),
     gen_server:cast(?NODES_SRV, {'conference_update'
                                  ,Node
                                  ,props:get_value(<<"Conference-Name">>, Props)
-                                 ,[{#conference.node, Node} | conference_fields(Props)]
+                                 ,[{#conference.node, Node}
+                                   ,{#conference.switch_url, props:get_value(<<"URL">>, ProfileProps)}
+                                   ,{#conference.switch_external_ip, props:get_value(<<"Ext-SIP-IP">>, ProfileProps)}
+                                   | conference_fields(Props)
+                                  ]
                                 }).
 
 relay_event(Props) ->
@@ -288,6 +302,7 @@ relay_event(Props) ->
                          ,{<<"Conference-Profile-Name">>, #conference.profile_name}
                          ,{<<"New-ID">>, #conference.with_floor, fun safe_integer_get/3, 0}
                          ,{<<"Old-ID">>, #conference.lost_floor, fun safe_integer_get/3, 0}
+                         ,{<<"Switch-Hostname">>, #conference.switch_hostname, fun props:get_value/2}
                         ]).
 conference_fields(Props) -> fields(Props, ?FS_CONF_FIELDS).
 
