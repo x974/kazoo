@@ -709,13 +709,13 @@ get_conference_app(ChanNode, UUID, JObj, 'true') ->
             case wait_for_conference(ConfName) of
                 {'ok', ChanNode} ->
                     lager:debug("conference has started on ~s", [ChanNode]),
-                    {<<"conference">>, noop};
+                    {<<"conference">>, 'noop'};
                 {'ok', OtherNode} ->
                     lager:debug("conference has started on other node ~s, lets move", [OtherNode]),
-                    get_conference_app(ChanNode, UUID, JObj);
+                    get_conference_app(ChanNode, UUID, JObj, 'true');
                 {'error', _E} ->
                     lager:debug("error waiting for conference: ~p", [_E]),
-                    {<<"conference">>, noop}
+                    {<<"conference">>, 'noop'}
             end;
         {'ok', ChanNode} ->
             lager:debug("channel is on same node as conference"),
@@ -726,7 +726,7 @@ get_conference_app(ChanNode, UUID, JObj, 'true') ->
             lager:debug("channel has moved to ~s", [ConfNode]),
             {<<"conference">>, Cmd, ConfNode}
     end;
-get_conference_app(_ChanNode, _UUID, JObj) ->
+get_conference_app(_ChanNode, _UUID, JObj, 'false') ->
     ConfName = wh_json:get_value(<<"Conference-ID">>, JObj),
     {<<"conference">>, list_to_binary([ConfName, "@default"])}.
 
